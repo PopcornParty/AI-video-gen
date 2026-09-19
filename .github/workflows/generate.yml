@@ -8,9 +8,9 @@ on:
         required: true
         default: "Amazing space facts"
       duration:
-        description: "Target length in seconds (21-58)"
+        description: "Target length in seconds (22-45 works best)"
         required: false
-        default: "35"
+        default: "32"
 
 jobs:
   generate:

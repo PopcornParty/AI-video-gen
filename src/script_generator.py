@@ -4,11 +4,10 @@ import re
 from .research import clean_topic_query, is_tips_topic, specific_tokens, visual_lookups
 from .utils import info, unique_keep_order
 
-# ~2.5 spoken words per second
 HOOK_WORDS = 8
-INTEREST_WORDS = 24  # up to ~10 seconds
+INTEREST_WORDS = 24
 
-def generate_script(research, target_duration=45, language="en"):
+def generate_script(research, target_duration=32, language="en"):
     facts = research.get("facts") or []
     topic = research.get("topic") or "this topic"
     info("Script: 3s hook, 10s interest, then facts")
@@ -29,9 +28,9 @@ def _focus_label(topic):
 def _structured_script(topic, facts, target_duration):
     label = _focus_label(topic)
     cleaned = unique_keep_order([_tighten(f) for f in facts if len(f) > 30])
-    hook, hook_card = _make_hook(topic, label, cleaned[0] if cleaned else "")
+    hook, hook_card = _make_hook(topic, label, cleaned)
     interest = _make_interest(topic, label, cleaned)
-    fact_budget = max(40, int(target_duration * 2.4) - len(hook.split()) - len(interest.split()) - 8)
+    fact_budget = max(28, int(min(target_duration, 40) * 2.2) - len(hook.split()) - len(interest.split()) - 12)
     body = []
     used = 0
     for fact in cleaned:
@@ -45,10 +44,10 @@ def _structured_script(topic, facts, target_duration):
         body.append(fact)
         used += words
     if not body:
-        body = [f"Here is what actually matters about {label}."]
+        body = [f"Here is the part that actually matters about {label}."]
         if cleaned:
             body.append(cleaned[0])
-    ending = f"Follow for more on {label}."
+    ending = _make_ending(label, hook)
     return {
         "hook": hook,
         "hook_card": hook_card,
@@ -59,40 +58,42 @@ def _structured_script(topic, facts, target_duration):
         "provider": "hook-interest-facts",
     }
 
-def _make_hook(topic, label, first_fact):
-    """First ~3 seconds. Pattern interrupt + curiosity. No greeting."""
+def _make_hook(topic, label, facts):
+    """First ~2-3 seconds. Pattern interrupt + curiosity. Spoken + on-screen."""
     short_label = label if len(label.split()) <= 4 else " ".join(label.split()[:4])
+    formulas = [
+        (f"Wait. {short_label} is not what you think.", f"Wait. {short_label}."),
+        (f"Stop. This is the real {short_label} part.", f"The real {short_label}"),
+        (f"Why does {short_label} actually work like this?", f"Why {short_label}?"),
+        (f"Don't swipe. {short_label} gets weird next.", f"Don't swipe."),
+    ]
     if is_tips_topic(topic):
-        hook = f"You're doing {short_label} wrong."
-        card = f"Wrong {short_label}?"
-    elif first_fact:
-        hook = f"This {short_label} fact is not what you think."
-        card = f"Wait. {short_label}."
-    else:
-        hook = f"Most people miss this about {short_label}."
-        card = f"Missed: {short_label}"
-    hook = _limit_words(hook, HOOK_WORDS)
-    card = _limit_words(card, 5)
-    return hook, card
+        formulas.insert(0, (f"You're doing {short_label} wrong.", f"Wrong {short_label}?"))
+    if facts:
+        snippet = " ".join(facts[0].split()[:6]).rstrip(",;:.")
+        formulas.insert(0, (f"{snippet}. That's the trap.", snippet))
+    idx = abs(hash(topic.lower())) % len(formulas)
+    hook, card = formulas[idx]
+    return _limit_words(hook, HOOK_WORDS), _limit_words(card, 5).rstrip(".")
 
 def _make_interest(topic, label, facts):
-    """Next ~10 seconds. Open a loop, promise the payoff, do not dump facts yet."""
     tease = ""
     if facts:
-        bit = facts[0]
-        words = bit.split()
-        tease = " ".join(words[:12]).rstrip(",;:")
-    if is_tips_topic(topic):
-        line = f"Stay for the part that actually changes how you use {label}. {tease}."
-    else:
-        line = f"If you swipe now you miss why {label} works this way. {tease}."
+        tease = " ".join(facts[0].split()[:10]).rstrip(",;:")
+    line = f"Stay. The reason {label} works is coming. {tease}."
     return _tighten(_limit_words(line, INTEREST_WORDS))
 
+def _make_ending(label, hook):
+    return f"Follow for more {label}. Loop it if you missed the first line."
+
 def _limit_words(text, n):
-    words = text.split()
+    words = re.findall(r"\S+", text)
     if len(words) <= n:
         return text.strip()
-    return " ".join(words[:n]).rstrip(",;:") + "."
+    out = " ".join(words[:n]).rstrip(",;:")
+    if not out.endswith(("?", "!", ".")):
+        out += "."
+    return out
 
 def _tighten(sentence):
     s = re.sub(r"\s+", " ", sentence).strip()
@@ -101,15 +102,12 @@ def _tighten(sentence):
     if not s.endswith((".", "!", "?")):
         s += "."
     words = s.split()
-    if len(words) > 32:
-        s = " ".join(words[:32]).rstrip(",;:") + "."
+    if len(words) > 28:
+        s = " ".join(words[:28]).rstrip(",;:") + "."
     return s
 
 def _plan_scenes(script, research):
-    units = [
-        ("hook", script.get("hook", "")),
-        ("interest", script.get("interest", "")),
-    ]
+    units = [("hook", script.get("hook", "")), ("interest", script.get("interest", ""))]
     for fact in script.get("body") or []:
         units.append(("fact", fact))
     units.append(("ending", script.get("ending", "")))
@@ -138,9 +136,8 @@ def _plan_scenes(script, research):
 
 _STOP = {
     "this", "that", "with", "from", "have", "most", "people", "about", "follow",
-    "short", "facts", "true", "real", "want", "like", "more", "next", "origin",
-    "story", "company", "history", "category", "bigger", "generic", "overview",
-    "swipe", "miss", "stay", "wrong", "think",
+    "short", "facts", "true", "real", "want", "like", "more", "next", "stay",
+    "wait", "stop", "swipe", "wrong", "think", "works", "coming", "loop",
 }
 
 def _query_variants(text, topic, lookups, index):

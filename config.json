@@ -3,9 +3,9 @@
     "width": 1080,
     "height": 1920,
     "fps": 30,
-    "target_duration": 45,
+    "target_duration": 32,
     "min_duration": 21,
-    "max_duration": 58,
+    "max_duration": 45,
     "bitrate": "8M",
     "codec": "libx264",
     "audio_codec": "aac",
@@ -14,7 +14,7 @@
   "voice": {
     "provider": "edge",
     "voice": "en-US-AndrewNeural",
-    "rate": "+8%",
+    "rate": "+12%",
     "pitch": "+0Hz",
     "fallback_provider": "gtts",
     "fallback_voice": "en"
@@ -33,7 +33,7 @@
     "highlight_color": "#FFD60A",
     "stroke_color": "#000000",
     "stroke_width": 4,
-    "max_words_per_line": 5,
+    "max_words_per_line": 4,
     "position": "center"
   },
   "visuals": {
