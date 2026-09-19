@@ -2,7 +2,6 @@
 from __future__ import annotations
 import re
 from typing import Any
-from .fact_checker import filter_script_to_sources
 from .utils import info, unique_keep_order
 
 def generate_script(research, target_duration=45, language="en"):
@@ -60,19 +59,69 @@ def _plan_scenes(script, research):
     units = [script.get("hook", "")] + list(script.get("body") or []) + [script.get("ending", "")]
     units = [u.strip() for u in units if u and u.strip()]
     topic = research.get("topic") or ""
+    keywords = research.get("keywords") or []
+    used_queries = set()
     scenes = []
     for i, text in enumerate(units):
-        scenes.append({"index": i + 1, "text": text, "search_query": _visual_query(text, topic, research.get("keywords") or []), "kind": "hook" if i == 0 else ("ending" if i == len(units) - 1 else "body")})
+        query = _visual_query(text, topic, keywords, i, used_queries)
+        used_queries.add(query.lower())
+        scenes.append({
+            "index": i + 1,
+            "text": text,
+            "search_query": query,
+            "search_queries": _query_variants(text, topic, keywords, i),
+            "kind": "hook" if i == 0 else ("ending" if i == len(units) - 1 else "body"),
+        })
     return scenes
 
-def _visual_query(text, topic, keywords):
+_STOP = {
+    "this", "that", "with", "from", "have", "most", "people", "about", "actually",
+    "follow", "short", "facts", "fact", "true", "real", "never", "hear", "want",
+    "like", "more", "next", "stop", "scrolling", "amazing", "insane", "idea",
+    "simply", "often", "usually", "called", "known", "also", "their", "them",
+}
+
+def _visual_query(text, topic, keywords, index, used_queries):
+    variants = _query_variants(text, topic, keywords, index)
+    for query in variants:
+        if query.lower() not in used_queries:
+            return query
+    return variants[0] if variants else topic
+
+def _query_variants(text, topic, keywords, index):
     from .research import clean_topic_query
     core = clean_topic_query(topic)
-    low = (core + " " + topic).lower()
-    if "minecraft" in low:
-        return "minecraft overworld landscape"
-    if "space" in low:
-        return "outer space galaxy stars nebula"
-    if "engineering" in low:
-        return "engineering construction bridge machines"
-    return (core or topic)[:80]
+    subject = core or topic
+    sentence_words = [w for w in re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", text) if w.lower() not in _STOP]
+    extras = []
+    if keywords:
+        extras.append(str(keywords[min(index, len(keywords) - 1)]))
+    if sentence_words:
+        extras.append(" ".join(sentence_words[:4]))
+        extras.append(sentence_words[0])
+    extras.extend(_subject_angles(subject, index))
+    variants = []
+    for extra in extras:
+        query = f"{subject} {extra}".strip()
+        query = re.sub(r"\s+", " ", query)[:80]
+        if query and query.lower() not in {v.lower() for v in variants}:
+            variants.append(query)
+    if not variants:
+        variants = [subject]
+    return variants
+
+def _subject_angles(subject, index):
+    low = subject.lower()
+    banks = {
+        "space": ["earth from space", "milky way galaxy", "nebula clouds", "saturn planet", "rocket launch", "astronaut spacewalk", "hubble telescope image"],
+        "minecraft": ["minecraft mountains", "minecraft forest", "minecraft cave", "minecraft village", "minecraft ocean", "minecraft night sky"],
+        "engineering": ["suspension bridge", "skyscraper construction", "factory machines", "high speed train", "dam hydroelectric", "aircraft assembly"],
+        "ocean": ["coral reef", "ocean waves aerial", "whale underwater", "deep sea", "rocky coastline"],
+        "volcano": ["erupting volcano", "lava flow", "volcanic crater", "ash cloud"],
+        "animal": ["wildlife close up", "animal habitat", "birds in flight"],
+    }
+    for key, angles in banks.items():
+        if key in low:
+            return [angles[index % len(angles)], angles[(index + 2) % len(angles)]]
+    generic = ["photograph", "landscape", "close up", "aerial view", "historic photo", "diagram photo"]
+    return [generic[index % len(generic)]]
