@@ -30,7 +30,7 @@ jobs:
       - name: Install system tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-lato fonts-liberation zip
+          sudo apt-get install -y ffmpeg fonts-lato fonts-liberation
 
       - name: Install Python packages
         run: |
@@ -40,7 +40,7 @@ jobs:
       - name: Generate Short (no API keys)
         run: python main.py --topic "${{ github.event.inputs.topic }}" --duration ${{ github.event.inputs.duration }}
 
-      - name: Pack YouTube upload ZIP
+      - name: Prepare download folder
         run: |
           set -e
           mkdir -p youtube-upload
@@ -53,27 +53,31 @@ jobs:
           if [ -f "$RUNDIR/hashtags.txt" ]; then
             cp "$RUNDIR/hashtags.txt" youtube-upload/youtube-hashtags.txt
           else
-            grep -oE '#[A-Za-z0-9_]+' "$RUNDIR/description.txt" | tr '\n' ' ' > youtube-upload/youtube-hashtags.txt
+            grep -oE '#[A-Za-z0-9_]+' "$RUNDIR/description.txt" | tr '\n' ' ' > youtube-upload/youtube-hashtags.txt || true
             echo >> youtube-upload/youtube-hashtags.txt
           fi
           cp "$RUNDIR/tags.txt" youtube-upload/youtube-tags.txt || true
           {
             echo "Topic: ${{ github.event.inputs.topic }}"
-            echo "Upload video.mp4 to YouTube Shorts."
-            echo "Use youtube-title.txt as the title."
-            echo "Use youtube-description.txt as the description."
-            echo "Paste youtube-hashtags.txt into the description or tags box."
+            echo "On iPhone: tap the download, then tap video.mp4 to play it."
+            echo "youtube-title.txt = YouTube title"
+            echo "youtube-description.txt = YouTube description"
+            echo "youtube-hashtags.txt = hashtags"
           } > youtube-upload/README.txt
-          (cd youtube-upload && zip -r ../youtube-short.zip .)
-          ls -lh youtube-short.zip
+          ls -lh youtube-upload
           echo "----- TITLE -----"
           cat youtube-upload/youtube-title.txt
-          echo "----- HASHTAGS -----"
-          cat youtube-upload/youtube-hashtags.txt
 
-      - name: Upload ZIP
+      - name: Upload Short files
         uses: actions/upload-artifact@v4
         with:
           name: youtube-short
-          path: youtube-short.zip
+          path: youtube-upload/*
+          if-no-files-found: error
+
+      - name: Upload video only
+        uses: actions/upload-artifact@v4
+        with:
+          name: video
+          path: youtube-upload/video.mp4
           if-no-files-found: error
