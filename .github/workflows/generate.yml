@@ -1,0 +1,79 @@
+name: Generate Short
+
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Topic for the YouTube Short"
+        required: true
+        default: "Amazing space facts"
+      duration:
+        description: "Target length in seconds (21-58)"
+        required: false
+        default: "35"
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-lato fonts-liberation zip
+
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Generate Short (no API keys)
+        run: python main.py --topic "${{ github.event.inputs.topic }}" --duration ${{ github.event.inputs.duration }}
+
+      - name: Pack YouTube upload ZIP
+        run: |
+          set -e
+          mkdir -p youtube-upload
+          VIDEO=$(find output -name video.mp4 | head -n 1)
+          test -n "$VIDEO"
+          RUNDIR=$(dirname "$VIDEO")
+          cp "$VIDEO" youtube-upload/video.mp4
+          cp "$RUNDIR/title.txt" youtube-upload/youtube-title.txt
+          cp "$RUNDIR/description.txt" youtube-upload/youtube-description.txt
+          if [ -f "$RUNDIR/hashtags.txt" ]; then
+            cp "$RUNDIR/hashtags.txt" youtube-upload/youtube-hashtags.txt
+          else
+            grep -oE '#[A-Za-z0-9_]+' "$RUNDIR/description.txt" | tr '\n' ' ' > youtube-upload/youtube-hashtags.txt
+            echo >> youtube-upload/youtube-hashtags.txt
+          fi
+          cp "$RUNDIR/tags.txt" youtube-upload/youtube-tags.txt || true
+          {
+            echo "Topic: ${{ github.event.inputs.topic }}"
+            echo "Upload video.mp4 to YouTube Shorts."
+            echo "Use youtube-title.txt as the title."
+            echo "Use youtube-description.txt as the description."
+            echo "Paste youtube-hashtags.txt into the description or tags box."
+          } > youtube-upload/README.txt
+          (cd youtube-upload && zip -r ../youtube-short.zip .)
+          ls -lh youtube-short.zip
+          echo "----- TITLE -----"
+          cat youtube-upload/youtube-title.txt
+          echo "----- HASHTAGS -----"
+          cat youtube-upload/youtube-hashtags.txt
+
+      - name: Upload ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-short
+          path: youtube-short.zip
+          if-no-files-found: error
