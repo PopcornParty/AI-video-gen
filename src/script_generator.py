@@ -1,71 +1,98 @@
-"""Write a Shorts script from researched facts. No API key required."""
+"""Write a Shorts script: 3s hook, 10s interest, then facts."""
 from __future__ import annotations
 import re
 from .research import clean_topic_query, is_tips_topic, specific_tokens, visual_lookups
 from .utils import info, unique_keep_order
 
+# ~2.5 spoken words per second
+HOOK_WORDS = 8
+INTEREST_WORDS = 24  # up to ~10 seconds
+
 def generate_script(research, target_duration=45, language="en"):
     facts = research.get("facts") or []
     topic = research.get("topic") or "this topic"
-    info("Script written from on-topic research")
-    if is_tips_topic(topic) or research.get("tips_topic"):
-        script = _tips_script(topic, facts, target_duration)
-    else:
-        script = _template_script(topic, facts, target_duration)
+    info("Script: 3s hook, 10s interest, then facts")
+    script = _structured_script(topic, facts, target_duration)
     script["full_narration"] = _compose_narration(script)
     script["scenes"] = _plan_scenes(script, research)
     script["sources"] = research.get("sources") or []
     return script
 
 def _compose_narration(script):
-    parts = [script.get("hook", "")] + list(script.get("body") or []) + [script.get("ending", "")]
+    parts = [script.get("hook", ""), script.get("interest", "")] + list(script.get("body") or []) + [script.get("ending", "")]
     return re.sub(r"\s+", " ", " ".join(p.strip() for p in parts if p and p.strip())).strip()
 
 def _focus_label(topic):
     specific = specific_tokens(topic)
     return " ".join(specific) if specific else clean_topic_query(topic)
 
-def _tips_script(topic, facts, target_duration):
+def _structured_script(topic, facts, target_duration):
     label = _focus_label(topic)
-    hook = f"This is {label}. Not the origin story of the bigger topic."
+    cleaned = unique_keep_order([_tighten(f) for f in facts if len(f) > 30])
+    hook, hook_card = _make_hook(topic, label, cleaned[0] if cleaned else "")
+    interest = _make_interest(topic, label, cleaned)
+    fact_budget = max(40, int(target_duration * 2.4) - len(hook.split()) - len(interest.split()) - 8)
     body = []
-    for fact in unique_keep_order([_tighten(f) for f in facts])[:8]:
-        low = fact.lower()
-        if any(w in low for w in ("developed by", "published by", "founded by", "released in", "headquarters")):
+    used = 0
+    for fact in cleaned:
+        if fact.lower() in hook.lower() or fact.lower() in interest.lower():
             continue
+        if any(w in fact.lower() for w in ("developed by", "published by", "founded by", "released in", "headquarters")):
+            continue
+        words = len(fact.split())
+        if used + words > fact_budget:
+            break
         body.append(fact)
-    if len(body) < 3:
-        body = unique_keep_order(body + [
-            f"The useful part of {label} is how you actually use it.",
-            f"Keep the steps on {label}, not a generic overview.",
-            f"If a detail is not about {label}, skip it.",
-        ])
-    budget = max(55, int(target_duration * 2.4))
-    kept = []
-    used = len(hook.split())
-    for line in body:
-        if used + len(line.split()) > budget:
-            break
-        kept.append(line)
-        used += len(line.split())
-    return {"hook": hook, "body": kept or body[:3], "ending": f"Follow for more {label}.", "title_seed": label, "provider": "tips"}
+        used += words
+    if not body:
+        body = [f"Here is what actually matters about {label}."]
+        if cleaned:
+            body.append(cleaned[0])
+    ending = f"Follow for more on {label}."
+    return {
+        "hook": hook,
+        "hook_card": hook_card,
+        "interest": interest,
+        "body": body,
+        "ending": ending,
+        "title_seed": label,
+        "provider": "hook-interest-facts",
+    }
 
-def _template_script(topic, facts, target_duration):
-    label = _focus_label(topic)
-    usable = unique_keep_order([_tighten(f) for f in facts if len(f) > 35])[:8]
-    if not usable:
-        usable = [f"The details behind {label} are what people usually miss."]
-    hook = f"This is about {label}. {_tighten(usable[0])}"
-    budget = max(55, int(target_duration * 2.4))
-    body = []
-    used = len(hook.split())
-    for fact in usable:
-        if used + len(fact.split()) > budget:
-            break
-        if fact.lower() not in hook.lower():
-            body.append(fact)
-            used += len(fact.split())
-    return {"hook": hook, "body": body or [usable[0]], "ending": f"Follow if you want more on {label}.", "title_seed": label, "provider": "template"}
+def _make_hook(topic, label, first_fact):
+    """First ~3 seconds. Pattern interrupt + curiosity. No greeting."""
+    short_label = label if len(label.split()) <= 4 else " ".join(label.split()[:4])
+    if is_tips_topic(topic):
+        hook = f"You're doing {short_label} wrong."
+        card = f"Wrong {short_label}?"
+    elif first_fact:
+        hook = f"This {short_label} fact is not what you think."
+        card = f"Wait. {short_label}."
+    else:
+        hook = f"Most people miss this about {short_label}."
+        card = f"Missed: {short_label}"
+    hook = _limit_words(hook, HOOK_WORDS)
+    card = _limit_words(card, 5)
+    return hook, card
+
+def _make_interest(topic, label, facts):
+    """Next ~10 seconds. Open a loop, promise the payoff, do not dump facts yet."""
+    tease = ""
+    if facts:
+        bit = facts[0]
+        words = bit.split()
+        tease = " ".join(words[:12]).rstrip(",;:")
+    if is_tips_topic(topic):
+        line = f"Stay for the part that actually changes how you use {label}. {tease}."
+    else:
+        line = f"If you swipe now you miss why {label} works this way. {tease}."
+    return _tighten(_limit_words(line, INTEREST_WORDS))
+
+def _limit_words(text, n):
+    words = text.split()
+    if len(words) <= n:
+        return text.strip()
+    return " ".join(words[:n]).rstrip(",;:") + "."
 
 def _tighten(sentence):
     s = re.sub(r"\s+", " ", sentence).strip()
@@ -79,13 +106,19 @@ def _tighten(sentence):
     return s
 
 def _plan_scenes(script, research):
-    units = [script.get("hook", "")] + list(script.get("body") or []) + [script.get("ending", "")]
-    units = [u.strip() for u in units if u and u.strip()]
+    units = [
+        ("hook", script.get("hook", "")),
+        ("interest", script.get("interest", "")),
+    ]
+    for fact in script.get("body") or []:
+        units.append(("fact", fact))
+    units.append(("ending", script.get("ending", "")))
+    units = [(k, t.strip()) for k, t in units if t and t.strip()]
     topic = research.get("topic") or ""
     lookups = research.get("visual_lookups") or visual_lookups(topic)
     used_queries = set()
     scenes = []
-    for i, text in enumerate(units):
+    for i, (kind, text) in enumerate(units):
         variants = _query_variants(text, topic, lookups, i)
         query = variants[0]
         for item in variants:
@@ -96,9 +129,10 @@ def _plan_scenes(script, research):
         scenes.append({
             "index": i + 1,
             "text": text,
+            "kind": kind,
+            "hook_card": script.get("hook_card", "") if kind == "hook" else "",
             "search_query": query,
             "search_queries": variants,
-            "kind": "hook" if i == 0 else ("ending" if i == len(units) - 1 else "body"),
         })
     return scenes
 
@@ -106,6 +140,7 @@ _STOP = {
     "this", "that", "with", "from", "have", "most", "people", "about", "follow",
     "short", "facts", "true", "real", "want", "like", "more", "next", "origin",
     "story", "company", "history", "category", "bigger", "generic", "overview",
+    "swipe", "miss", "stay", "wrong", "think",
 }
 
 def _query_variants(text, topic, lookups, index):

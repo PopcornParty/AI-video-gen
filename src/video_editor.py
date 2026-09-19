@@ -2,9 +2,8 @@
 from __future__ import annotations
 import subprocess
 from pathlib import Path
-from typing import Any, Optional
 from PIL import Image
-from .utils import info, project_root, warn
+from .utils import info, warn
 
 def render_short(scenes, audio_path, caption_groups, music_path, output_path: Path, cfg, work_dir: Path) -> Path:
     video_cfg = cfg["video"]
@@ -27,10 +26,15 @@ def render_short(scenes, audio_path, caption_groups, music_path, output_path: Pa
     visuals_fit = work_dir / "visuals_fit.mp4"
     _fit_length(concat_path, visuals_fit, duration, fps)
     captioned = work_dir / "captioned.mp4"
-    if cap_cfg.get("enabled", True) and caption_groups:
+    hook_card = ""
+    for scene in scenes:
+        if scene.get("kind") == "hook" and scene.get("hook_card"):
+            hook_card = scene["hook_card"]
+            break
+    if cap_cfg.get("enabled", True) and (caption_groups or hook_card):
         info("Burning captions")
         ass_path = work_dir / "captions.ass"
-        _write_ass(caption_groups, ass_path, W, H, cap_cfg)
+        _write_ass(caption_groups, ass_path, W, H, cap_cfg, hook_card)
         _burn_subtitles(visuals_fit, ass_path, captioned)
         if not captioned.exists():
             captioned = visuals_fit
@@ -101,11 +105,14 @@ def _fit_length(src, dest, duration, fps):
     if not _run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(src), "-t", f"{duration:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-r", str(fps), str(dest)]):
         raise RuntimeError("Could not fit video length to narration")
 
-def _write_ass(groups, path, W, H, cap_cfg):
+def _write_ass(groups, path, W, H, cap_cfg, hook_card=""):
     size = int(cap_cfg.get("font_size", 68))
-    header = f"""[Script Info]\nScriptType: v4.00+\nPlayResX: {W}\nPlayResY: {H}\nWrapStyle: 2\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Lato,{size},&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,0,2,70,70,{int(H * 0.28)},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
+    hook_size = max(72, size + 10)
+    header = f"""[Script Info]\nScriptType: v4.00+\nPlayResX: {W}\nPlayResY: {H}\nWrapStyle: 2\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Lato,{size},&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,0,2,70,70,{int(H * 0.28)},1\nStyle: Hook,Lato,{hook_size},&H00FFFFFF,&H0000FFFF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,6,0,8,50,50,{int(H * 0.16)},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
     events = []
-    for g in groups:
+    if hook_card:
+        events.append(f"Dialogue: 1,0:00:00.00,0:00:02.80,Hook,,0,0,0,,{_ass_escape(hook_card)}")
+    for g in groups or []:
         text = _ass_escape(g.get("text") or "")
         events.append(f"Dialogue: 0,{_ass_time(g['start'])},{_ass_time(g['end'])},Default,,0,0,0,,{text}")
     path.write_text(header + "\n".join(events) + "\n", encoding="utf-8")
