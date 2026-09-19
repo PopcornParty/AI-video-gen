@@ -2,6 +2,7 @@
 from __future__ import annotations
 import re
 from typing import Any
+from .research import clean_topic_query, topic_tokens
 from .utils import info, unique_keep_order
 
 def generate_script(research, target_duration=45, language="en"):
@@ -19,9 +20,10 @@ def _compose_narration(script):
     return re.sub(r"\s+", " ", " ".join(p.strip() for p in parts if p and p.strip())).strip()
 
 def _template_script(topic, facts, target_duration):
+    label = clean_topic_query(topic)
     usable = unique_keep_order([_tighten(f) for f in facts if len(f) > 35])[:8]
     if not usable:
-        usable = [f"Public sources still surprise people who look closely at {topic}."]
+        usable = [f"The details behind {label} are what people usually miss."]
     hook = _hook_from_fact(topic, usable[0])
     budget = max(55, int(target_duration * 2.4))
     body = []
@@ -34,15 +36,18 @@ def _template_script(topic, facts, target_duration):
             used += len(fact.split())
     if not body:
         body = [usable[0]]
-    return {"hook": hook, "body": body, "ending": "If you want more quick facts like this, follow for the next Short.", "title_seed": topic, "provider": "template"}
+    return {
+        "hook": hook,
+        "body": body,
+        "ending": f"Follow if you want more on {label}.",
+        "title_seed": label,
+        "provider": "template",
+    }
 
 def _hook_from_fact(topic, fact):
-    from .research import clean_topic_query
     label = clean_topic_query(topic)
     clean = _tighten(fact)
-    if len(clean.split()) <= 18:
-        return f"Most people have no idea this is true about {label}. {clean}"
-    return f"Stop scrolling. This {label} fact is actually real. {clean}"
+    return f"This is about {label}, not the whole category around it. {clean}"
 
 def _tighten(sentence):
     s = re.sub(r"\s+", " ", sentence).strip()
@@ -63,13 +68,18 @@ def _plan_scenes(script, research):
     used_queries = set()
     scenes = []
     for i, text in enumerate(units):
-        query = _visual_query(text, topic, keywords, i, used_queries)
+        variants = _query_variants(text, topic, keywords, i)
+        query = variants[0]
+        for item in variants:
+            if item.lower() not in used_queries:
+                query = item
+                break
         used_queries.add(query.lower())
         scenes.append({
             "index": i + 1,
             "text": text,
             "search_query": query,
-            "search_queries": _query_variants(text, topic, keywords, i),
+            "search_queries": variants,
             "kind": "hook" if i == 0 else ("ending" if i == len(units) - 1 else "body"),
         })
     return scenes
@@ -79,49 +89,27 @@ _STOP = {
     "follow", "short", "facts", "fact", "true", "real", "never", "hear", "want",
     "like", "more", "next", "stop", "scrolling", "amazing", "insane", "idea",
     "simply", "often", "usually", "called", "known", "also", "their", "them",
+    "category", "around", "whole", "public", "guides",
 }
 
-def _visual_query(text, topic, keywords, index, used_queries):
-    variants = _query_variants(text, topic, keywords, index)
-    for query in variants:
-        if query.lower() not in used_queries:
-            return query
-    return variants[0] if variants else topic
-
 def _query_variants(text, topic, keywords, index):
-    from .research import clean_topic_query
-    core = clean_topic_query(topic)
-    subject = core or topic
+    subject = clean_topic_query(topic)
+    tokens = topic_tokens(topic)
     sentence_words = [w for w in re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", text) if w.lower() not in _STOP]
-    extras = []
-    if keywords:
-        extras.append(str(keywords[min(index, len(keywords) - 1)]))
-    if sentence_words:
-        extras.append(" ".join(sentence_words[:4]))
-        extras.append(sentence_words[0])
-    extras.extend(_subject_angles(subject, index))
     variants = []
-    for extra in extras:
-        query = f"{subject} {extra}".strip()
-        query = re.sub(r"\s+", " ", query)[:80]
-        if query and query.lower() not in {v.lower() for v in variants}:
-            variants.append(query)
-    if not variants:
-        variants = [subject]
-    return variants
-
-def _subject_angles(subject, index):
-    low = subject.lower()
-    banks = {
-        "space": ["earth from space", "milky way galaxy", "nebula clouds", "saturn planet", "rocket launch", "astronaut spacewalk", "hubble telescope image"],
-        "minecraft": ["minecraft mountains", "minecraft forest", "minecraft cave", "minecraft village", "minecraft ocean", "minecraft night sky"],
-        "engineering": ["suspension bridge", "skyscraper construction", "factory machines", "high speed train", "dam hydroelectric", "aircraft assembly"],
-        "ocean": ["coral reef", "ocean waves aerial", "whale underwater", "deep sea", "rocky coastline"],
-        "volcano": ["erupting volcano", "lava flow", "volcanic crater", "ash cloud"],
-        "animal": ["wildlife close up", "animal habitat", "birds in flight"],
-    }
-    for key, angles in banks.items():
-        if key in low:
-            return [angles[index % len(angles)], angles[(index + 2) % len(angles)]]
-    generic = ["photograph", "landscape", "close up", "aerial view", "historic photo", "diagram photo"]
-    return [generic[index % len(generic)]]
+    if sentence_words:
+        variants.append(f"{subject} {' '.join(sentence_words[:5])}")
+        variants.append(" ".join(sentence_words[:6]))
+    variants.append(subject)
+    if tokens:
+        variants.append(" ".join(tokens))
+    if keywords:
+        variants.append(f"{subject} {keywords[min(index, len(keywords) - 1)]}")
+    variants.append(f"{subject} screenshot")
+    variants.append(f"{subject} gameplay")
+    cleaned = []
+    for query in variants:
+        query = re.sub(r"\s+", " ", query).strip()[:80]
+        if query and query.lower() not in {v.lower() for v in cleaned}:
+            cleaned.append(query)
+    return cleaned or [topic]
