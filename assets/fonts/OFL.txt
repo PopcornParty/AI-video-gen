@@ -1,0 +1,1 @@
+Lato is SIL Open Font License. GitHub Actions installs fonts-lato.

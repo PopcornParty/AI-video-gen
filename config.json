@@ -1,0 +1,54 @@
+{
+  "video": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "target_duration": 45,
+    "min_duration": 21,
+    "max_duration": 58,
+    "bitrate": "8M",
+    "codec": "libx264",
+    "audio_codec": "aac",
+    "preset": "medium"
+  },
+  "voice": {
+    "provider": "edge",
+    "voice": "en-US-AndrewNeural",
+    "rate": "+8%",
+    "pitch": "+0Hz",
+    "fallback_provider": "gtts",
+    "fallback_voice": "en"
+  },
+  "music": {
+    "enabled": true,
+    "volume": 0.11,
+    "duck_volume": 0.07
+  },
+  "captions": {
+    "enabled": true,
+    "style": "modern",
+    "font_name": "Lato-Bold.ttf",
+    "font_size": 68,
+    "color": "#FFFFFF",
+    "highlight_color": "#FFD60A",
+    "stroke_color": "#000000",
+    "stroke_width": 4,
+    "max_words_per_line": 5,
+    "position": "center"
+  },
+  "visuals": {
+    "prefer_video": true,
+    "max_per_provider": 8,
+    "quality": "high",
+    "allow_images": true,
+    "ken_burns": true
+  },
+  "scenes": {
+    "min_count": 4,
+    "max_count": 8
+  },
+  "language": "en",
+  "output_folder": "output",
+  "cache_folder": "cache",
+  "cleanup_temp": true
+}
