@@ -2,7 +2,7 @@
 from __future__ import annotations
 import subprocess
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageFilter, ImageEnhance
 from .utils import info, warn
 
 def render_short(scenes, audio_path, caption_groups, music_path, output_path: Path, cfg, work_dir: Path) -> Path:
@@ -62,19 +62,44 @@ def _render_scene(scene, dest: Path, W, H, fps):
     _generated_scene(dest, W, H, fps, duration, int(scene.get("index") or 0))
 
 def _ken_burns(src, dest, W, H, fps, duration, index):
-    z0, z1 = 1.04, 1.16 if index % 2 == 0 else 1.12
+    sharp = Path(src).with_name(Path(src).stem + "_sharp.jpg")
+    if not _pre_sharpen(src, sharp, W, H):
+        sharp = Path(src)
+    z0, z1 = 1.02, 1.10 if index % 2 == 0 else 1.08
     frames = max(1, int(duration * fps))
-    vf = f"scale=2400:-1,zoompan=z='{z0}+({z1}-{z0})*on/{frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={W}x{H}:fps={fps}"
-    cmd = ["ffmpeg", "-y", "-loop", "1", "-i", src, "-t", f"{duration:.3f}", "-vf", vf, "-an", "-c:v", "libx264", "-preset", "veryfast", "-b:v", "6M", "-pix_fmt", "yuv420p", str(dest)]
+    vf = (
+        f"scale=1920:-2:flags=lanczos,"
+        f"zoompan=z='{z0}+({z1}-{z0})*on/{frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={W}x{H}:fps={fps},"
+        f"unsharp=5:5:0.8:5:5:0.0,"
+        f"eq=contrast=1.06:saturation=1.08:brightness=0.02"
+    )
+    cmd = [
+        "ffmpeg", "-y", "-loop", "1", "-i", str(sharp),
+        "-t", f"{duration:.3f}", "-vf", vf, "-an",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "17",
+        "-pix_fmt", "yuv420p", str(dest),
+    ]
     return _run(cmd) and dest.exists()
+
+def _pre_sharpen(src, dest: Path, W, H):
+    try:
+        img = Image.open(src).convert("RGB")
+        img.thumbnail((max(W * 2, 2160), max(H * 2, 3840)), Image.Resampling.LANCZOS)
+        img = ImageEnhance.Sharpness(img).enhance(1.25)
+        img = ImageEnhance.Contrast(img).enhance(1.06)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        img.save(dest, "JPEG", quality=95, optimize=True)
+        return dest.exists()
+    except Exception:
+        return False
 
 def _generated_scene(dest, W, H, fps, duration, index):
     palettes = [("#0c1226", "#225c8c"), ("#140c20", "#5c285a"), ("#081c18", "#185a46"), ("#1c100a", "#78461c")]
     c1, c2 = palettes[index % len(palettes)]
     img_path = dest.with_suffix(".png")
-    _write_gradient(img_path, 540, 960, c1, c2)
+    _write_gradient(img_path, W, H, c1, c2)
     if not _ken_burns(str(img_path), dest, W, H, fps, duration, index):
-        cmd = ["ffmpeg", "-y", "-loop", "1", "-i", str(img_path), "-t", f"{duration:.3f}", "-vf", f"scale={W}:{H}", "-c:v", "libx264", "-pix_fmt", "yuv420p", str(dest)]
+        cmd = ["ffmpeg", "-y", "-loop", "1", "-i", str(img_path), "-t", f"{duration:.3f}", "-vf", f"scale={W}:{H}:flags=lanczos", "-c:v", "libx264", "-crf", "17", "-pix_fmt", "yuv420p", str(dest)]
         if not _run(cmd):
             raise RuntimeError("Could not create fallback scene")
 
@@ -102,7 +127,7 @@ def _ffmpeg_concat(files, dest, fps):
         raise RuntimeError("FFmpeg concat failed")
 
 def _fit_length(src, dest, duration, fps):
-    if not _run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(src), "-t", f"{duration:.3f}", "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-r", str(fps), str(dest)]):
+    if not _run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(src), "-t", f"{duration:.3f}", "-c:v", "libx264", "-preset", "fast", "-crf", "17", "-pix_fmt", "yuv420p", "-r", str(fps), str(dest)]):
         raise RuntimeError("Could not fit video length to narration")
 
 def _write_ass(groups, path, W, H, cap_cfg, hook_card=""):
@@ -130,7 +155,7 @@ def _ass_time(seconds):
 def _burn_subtitles(video, ass_path, dest):
     fonts = "/usr/share/fonts/truetype/lato"
     filt = f"ass={ass_path.resolve().as_posix()}:fontsdir={fonts}"
-    if not _run(["ffmpeg", "-y", "-i", str(video), "-vf", filt, "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-an", str(dest)]):
+    if not _run(["ffmpeg", "-y", "-i", str(video), "-vf", filt, "-c:v", "libx264", "-preset", "fast", "-crf", "17", "-pix_fmt", "yuv420p", "-an", str(dest)]):
         warn("Caption burn failed, exporting without captions")
         subprocess.run(["cp", str(video), str(dest)], check=False)
 
@@ -147,7 +172,7 @@ def _mix_audio(narration, music_path, dest, duration, music_cfg):
 def _mux(video, audio, dest):
     if _run(["ffmpeg", "-y", "-i", str(video), "-i", str(audio), "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", str(dest)]):
         return
-    if not _run(["ffmpeg", "-y", "-i", str(video), "-i", str(audio), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(dest)]):
+    if not _run(["ffmpeg", "-y", "-i", str(video), "-i", str(audio), "-c:v", "libx264", "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(dest)]):
         raise RuntimeError("Final mux failed")
 
 def _run(cmd):

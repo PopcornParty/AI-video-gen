@@ -55,6 +55,7 @@ def _wikipedia_thumb(title, cache_dir, used_urls, used_paths):
     return _download_first(hits, cache_dir, used_urls, used_paths)
 
 def _download_first(hits, cache_dir, used_urls, used_paths):
+    hits = sorted(hits, key=lambda h: int(h.get("width") or 0), reverse=True)
     for hit in hits:
         url = hit.get("url")
         if not url or url in used_urls:
@@ -84,7 +85,7 @@ def _wikimedia_images(query):
             "gsrlimit": "16",
             "prop": "imageinfo",
             "iiprop": "url|mime|size",
-            "iiurlwidth": "1280",
+            "iiurlwidth": "1920",
             "format": "json",
         },
     )
@@ -104,10 +105,24 @@ def _wikimedia_images(query):
         mime = (info_.get("mime") or "").lower()
         if mime not in {"image/jpeg", "image/png", "image/webp"}:
             continue
+        width = int(info_.get("thumbwidth") or info_.get("width") or 0)
+        height = int(info_.get("thumbheight") or info_.get("height") or 0)
+        if width < 900 and height < 900:
+            continue
         url = info_.get("thumburl") or info_.get("url")
         if not url:
             continue
-        out.append({"url": url, "source": "wikimedia", "query": query, "attribution": f"{page.get('title', 'Wikimedia')} — Wikimedia Commons"})
+        orig = info_.get("url")
+        if orig and width < 1400 and int(info_.get("width") or 0) >= 1400:
+            url = orig
+            width = int(info_.get("width") or width)
+        out.append({
+            "url": url,
+            "width": width,
+            "source": "wikimedia",
+            "query": query,
+            "attribution": f"{page.get('title', 'Wikimedia')} — Wikimedia Commons",
+        })
     return out
 
 def _wikipedia_search_images(query):
@@ -120,7 +135,7 @@ def _wikipedia_search_images(query):
             "gsrlimit": "8",
             "prop": "pageimages",
             "piprop": "thumbnail",
-            "pithumbsize": "1280",
+            "pithumbsize": "1920",
             "format": "json",
         },
     )
@@ -133,7 +148,10 @@ def _wikipedia_search_images(query):
         url = thumb.get("source")
         if not url:
             continue
-        out.append({"url": url, "source": "wikipedia", "query": query, "attribution": f"{page.get('title', 'Wikipedia')} — Wikipedia"})
+        width = int(thumb.get("width") or 0)
+        if width and width < 700:
+            continue
+        out.append({"url": url, "width": width, "source": "wikipedia", "query": query, "attribution": f"{page.get('title', 'Wikipedia')} — Wikipedia"})
     return out
 
 def _pexels_photos(query):
@@ -146,9 +164,9 @@ def _pexels_photos(query):
     out = []
     for photo in resp.json().get("photos", []):
         src = photo.get("src") or {}
-        url = src.get("large2x") or src.get("large")
+        url = src.get("original") or src.get("large2x") or src.get("large")
         if url:
-            out.append({"url": url, "source": "pexels", "query": query, "attribution": f"Photo by {photo.get('photographer', 'Pexels')} on Pexels"})
+            out.append({"url": url, "width": 2000, "source": "pexels", "query": query, "attribution": f"Photo by {photo.get('photographer', 'Pexels')} on Pexels"})
     return out
 
 def _pixabay_photos(query):
@@ -160,7 +178,7 @@ def _pixabay_photos(query):
         return []
     out = []
     for photo in resp.json().get("hits", []):
-        url = photo.get("largeImageURL") or photo.get("webformatURL")
+        url = photo.get("fullHDURL") or photo.get("largeImageURL") or photo.get("webformatURL")
         if url:
-            out.append({"url": url, "source": "pixabay", "query": query, "attribution": "Photo from Pixabay"})
+            out.append({"url": url, "width": int(photo.get("imageWidth") or 1280), "source": "pixabay", "query": query, "attribution": "Photo from Pixabay"})
     return out
