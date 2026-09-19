@@ -1,5 +1,6 @@
 """Find royalty-free video clips and photos via Wikimedia."""
 from __future__ import annotations
+import re
 from pathlib import Path
 from .config_loader import env
 from .research import visual_lookups
@@ -18,15 +19,16 @@ def find_visuals_for_scenes(scenes, topic, cache_dir: Path, visuals_cfg):
         for extra in extras:
             if extra not in queries:
                 queries.append(extra)
+        tokens = [t.lower() for t in (scene.get("match_tokens") or []) if len(t) > 2]
         info(f"Visual search: {main}")
         asset = None
         for query in queries:
-            asset = _search_video(query, cache_dir, used_urls, used_paths)
+            asset = _search_video(query, cache_dir, used_urls, used_paths, tokens)
             if asset:
                 break
         if asset is None:
             for query in queries:
-                asset = _search_image(query, cache_dir, used_urls, used_paths)
+                asset = _search_image(query, cache_dir, used_urls, used_paths, tokens)
                 if asset:
                     break
         if asset is None:
@@ -41,29 +43,40 @@ def find_visuals_for_scenes(scenes, topic, cache_dir: Path, visuals_cfg):
         results.append(out)
     return results
 
-def _search_video(query, cache_dir, used_urls, used_paths):
+def _score(hit, tokens):
+    blob = f"{hit.get('title', '')} {hit.get('query', '')}".lower()
+    if not tokens:
+        return int(hit.get("width") or 0)
+    hits = sum(3 if t in (hit.get("title") or "").lower() else 1 for t in tokens if t in blob)
+    return hits * 1000 + int(hit.get("width") or 0)
+
+def _search_video(query, cache_dir, used_urls, used_paths, tokens):
     try:
         hits = _wikimedia_videos(query)
     except Exception as exc:
         warn(f"video search error: {exc}")
         hits = []
-    return _download_first(hits, cache_dir, used_urls, used_paths)
+    return _download_first(hits, cache_dir, used_urls, used_paths, tokens)
 
-def _search_image(query, cache_dir, used_urls, used_paths):
+def _search_image(query, cache_dir, used_urls, used_paths, tokens):
     for fn in (_wikimedia_images, _wikipedia_search_images, _pexels_photos, _pixabay_photos):
         try:
             hits = fn(query)
         except Exception as exc:
             warn(f"{fn.__name__} error: {exc}")
             hits = []
-        asset = _download_first(hits, cache_dir, used_urls, used_paths)
+        asset = _download_first(hits, cache_dir, used_urls, used_paths, tokens)
         if asset:
             return asset
     return None
 
-def _download_first(hits, cache_dir, used_urls, used_paths):
-    hits = sorted(hits, key=lambda h: int(h.get("width") or 0), reverse=True)
-    for hit in hits:
+def _download_first(hits, cache_dir, used_urls, used_paths, tokens):
+    ranked = sorted(hits, key=lambda h: _score(h, tokens), reverse=True)
+    if tokens:
+        matched = [h for h in ranked if _score(h, tokens) >= 1000]
+        if matched:
+            ranked = matched + [h for h in ranked if h not in matched]
+    for hit in ranked:
         url = hit.get("url")
         if not url or url in used_urls:
             continue
@@ -79,6 +92,7 @@ def _download_first(hits, cache_dir, used_urls, used_paths):
                 "query": hit.get("query", ""),
                 "source": hit.get("source", ""),
                 "attribution": hit.get("attribution", ""),
+                "title": hit.get("title", ""),
             }
     return None
 
@@ -106,8 +120,6 @@ def _wikimedia_videos(query):
             continue
         info_ = infos[0]
         mime = (info_.get("mime") or "").lower()
-        if not mime.startswith("video/"):
-            continue
         if mime not in {"video/mp4", "video/webm", "video/ogg"}:
             continue
         size = int(info_.get("size") or 0)
@@ -118,6 +130,7 @@ def _wikimedia_videos(query):
             continue
         out.append({
             "url": url,
+            "title": page.get("title", ""),
             "width": int(info_.get("width") or 1280),
             "kind": "video",
             "source": "wikimedia",
@@ -145,10 +158,10 @@ def _wikimedia_images(query):
         return []
     pages = resp.json().get("query", {}).get("pages", {})
     out = []
-    skip = ("logo", "icon", "flag of", "coat of arms", "svg", "map of", "wordmark", "screenshot of software")
+    skip = ("logo", "icon", "flag of", "coat of arms", "svg", "map of", "wordmark")
     for page in pages.values():
-        title = (page.get("title") or "").lower()
-        if any(s in title for s in skip):
+        title = page.get("title") or ""
+        if any(s in title.lower() for s in skip):
             continue
         infos = page.get("imageinfo") or []
         if not infos:
@@ -170,19 +183,16 @@ def _wikimedia_images(query):
             continue
         out.append({
             "url": url,
+            "title": title,
             "width": width,
             "kind": "image",
             "source": "wikimedia",
             "query": query,
-            "attribution": f"{page.get('title', 'Wikimedia')} — Wikimedia Commons",
+            "attribution": f"{title} — Wikimedia Commons",
         })
     return out
 
 def _wikipedia_search_images(query):
-    resp = http_get(
-        "https://en.wikipedia.org/wiki/Special:Redirect/file",
-        params={},
-    )
     resp = http_get(
         "https://en.wikipedia.org/w/api.php",
         params={
@@ -208,7 +218,8 @@ def _wikipedia_search_images(query):
         width = int(thumb.get("width") or 0)
         if width and width < 800:
             continue
-        out.append({"url": url, "width": width, "kind": "image", "source": "wikipedia", "query": query, "attribution": f"{page.get('title', 'Wikipedia')} — Wikipedia"})
+        title = page.get("title", "")
+        out.append({"url": url, "title": title, "width": width, "kind": "image", "source": "wikipedia", "query": query, "attribution": f"{title} — Wikipedia"})
     return out
 
 def _pexels_photos(query):
@@ -223,7 +234,7 @@ def _pexels_photos(query):
         src = photo.get("src") or {}
         url = src.get("original") or src.get("large2x") or src.get("large")
         if url:
-            out.append({"url": url, "width": 2000, "kind": "image", "source": "pexels", "query": query, "attribution": f"Photo by {photo.get('photographer', 'Pexels')} on Pexels"})
+            out.append({"url": url, "title": photo.get("alt") or query, "width": 2000, "kind": "image", "source": "pexels", "query": query, "attribution": f"Photo by {photo.get('photographer', 'Pexels')} on Pexels"})
     return out
 
 def _pixabay_photos(query):
@@ -237,5 +248,5 @@ def _pixabay_photos(query):
     for photo in resp.json().get("hits", []):
         url = photo.get("fullHDURL") or photo.get("largeImageURL") or photo.get("webformatURL")
         if url:
-            out.append({"url": url, "width": int(photo.get("imageWidth") or 1280), "kind": "image", "source": "pixabay", "query": query, "attribution": "Photo from Pixabay"})
+            out.append({"url": url, "title": photo.get("tags") or query, "width": int(photo.get("imageWidth") or 1280), "kind": "image", "source": "pixabay", "query": query, "attribution": "Photo from Pixabay"})
     return out

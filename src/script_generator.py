@@ -1,11 +1,18 @@
 """Write a Shorts script: 3s hook, 10s interest, then facts."""
 from __future__ import annotations
 import re
-from .research import clean_topic_query, is_tips_topic, specific_tokens, visual_lookups
+from .research import clean_topic_query, is_tips_topic, specific_tokens, topic_tokens, visual_lookups
 from .utils import info, unique_keep_order
 
 HOOK_WORDS = 8
 INTEREST_WORDS = 24
+
+_STOP = {
+    "this", "that", "with", "from", "have", "most", "people", "about", "follow",
+    "short", "facts", "true", "real", "want", "like", "more", "next", "stay",
+    "wait", "stop", "swipe", "wrong", "think", "works", "coming", "loop",
+    "missed", "first", "line", "reason", "actually", "what", "does", "don't",
+}
 
 def generate_script(research, target_duration=32, language="en"):
     facts = research.get("facts") or []
@@ -59,7 +66,6 @@ def _structured_script(topic, facts, target_duration):
     }
 
 def _make_hook(topic, label, facts):
-    """First ~2-3 seconds. Pattern interrupt + curiosity. Spoken + on-screen."""
     short_label = label if len(label.split()) <= 4 else " ".join(label.split()[:4])
     formulas = [
         (f"Wait. {short_label} is not what you think.", f"Wait. {short_label}."),
@@ -69,9 +75,6 @@ def _make_hook(topic, label, facts):
     ]
     if is_tips_topic(topic):
         formulas.insert(0, (f"You're doing {short_label} wrong.", f"Wrong {short_label}?"))
-    if facts:
-        snippet = " ".join(facts[0].split()[:6]).rstrip(",;:.")
-        formulas.insert(0, (f"{snippet}. That's the trap.", snippet))
     idx = abs(hash(topic.lower())) % len(formulas)
     hook, card = formulas[idx]
     return _limit_words(hook, HOOK_WORDS), _limit_words(card, 5).rstrip(".")
@@ -106,6 +109,9 @@ def _tighten(sentence):
         s = " ".join(words[:28]).rstrip(",;:") + "."
     return s
 
+def _content_words(text):
+    return [w for w in re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", text) if w.lower() not in _STOP]
+
 def _plan_scenes(script, research):
     units = [("hook", script.get("hook", "")), ("interest", script.get("interest", ""))]
     for fact in script.get("body") or []:
@@ -117,13 +123,14 @@ def _plan_scenes(script, research):
     used_queries = set()
     scenes = []
     for i, (kind, text) in enumerate(units):
-        variants = _query_variants(text, topic, lookups, i)
+        variants = _query_variants(kind, text, topic, lookups, i)
         query = variants[0]
         for item in variants:
             if item.lower() not in used_queries:
                 query = item
                 break
         used_queries.add(query.lower())
+        match = unique_keep_order([w.lower() for w in (specific_tokens(topic) + topic_tokens(topic) + _content_words(text))])
         scenes.append({
             "index": i + 1,
             "text": text,
@@ -131,25 +138,25 @@ def _plan_scenes(script, research):
             "hook_card": script.get("hook_card", "") if kind == "hook" else "",
             "search_query": query,
             "search_queries": variants,
+            "match_tokens": match[:12],
         })
     return scenes
 
-_STOP = {
-    "this", "that", "with", "from", "have", "most", "people", "about", "follow",
-    "short", "facts", "true", "real", "want", "like", "more", "next", "stay",
-    "wait", "stop", "swipe", "wrong", "think", "works", "coming", "loop",
-}
-
-def _query_variants(text, topic, lookups, index):
+def _query_variants(kind, text, topic, lookups, index):
     subject = _focus_label(topic)
+    nouns = _content_words(text)
     variants = []
+    if kind == "hook":
+        variants.append(subject)
+        if lookups:
+            variants.append(lookups[0])
+    if nouns:
+        variants.append(f"{subject} {' '.join(nouns[:5])}")
+        variants.append(" ".join(nouns[:6]))
+        variants.append(f"{subject} {nouns[0]}")
     if lookups:
         variants.append(lookups[index % len(lookups)])
-        variants.extend(lookups)
-    sentence_words = [w for w in re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", text) if w.lower() not in _STOP]
-    if sentence_words:
-        variants.insert(0, " ".join(sentence_words[:6]))
-        variants.append(f"{subject} {' '.join(sentence_words[:4])}")
+        variants.extend(lookups[:6])
     variants.append(subject)
     cleaned = []
     for query in variants:
