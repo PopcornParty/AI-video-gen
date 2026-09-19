@@ -6,7 +6,7 @@
     "target_duration": 32,
     "min_duration": 21,
     "max_duration": 45,
-    "bitrate": "8M",
+    "bitrate": "10M",
     "codec": "libx264",
     "audio_codec": "aac",
     "preset": "medium"
@@ -14,21 +14,21 @@
   "voice": {
     "provider": "edge",
     "voice": "en-US-AndrewNeural",
-    "rate": "+12%",
-    "pitch": "+0Hz",
+    "rate": "-6%",
+    "pitch": "-1Hz",
     "fallback_provider": "gtts",
     "fallback_voice": "en"
   },
   "music": {
     "enabled": true,
-    "volume": 0.11,
-    "duck_volume": 0.07
+    "volume": 0.09,
+    "duck_volume": 0.05
   },
   "captions": {
     "enabled": true,
     "style": "modern",
     "font_name": "Lato-Bold.ttf",
-    "font_size": 68,
+    "font_size": 64,
     "color": "#FFFFFF",
     "highlight_color": "#FFD60A",
     "stroke_color": "#000000",

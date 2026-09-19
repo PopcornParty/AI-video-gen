@@ -2,7 +2,7 @@
 from __future__ import annotations
 import subprocess
 from pathlib import Path
-from PIL import Image, ImageFilter, ImageEnhance
+from PIL import Image
 from .utils import info, warn
 
 def render_short(scenes, audio_path, caption_groups, music_path, output_path: Path, cfg, work_dir: Path) -> Path:
@@ -57,49 +57,60 @@ def _render_scene(scene, dest: Path, W, H, fps):
     duration = max(0.7, float(scene.get("duration") or (scene["end"] - scene["start"])))
     visual = scene.get("visual") or {}
     path = visual.get("path")
-    if path and Path(path).exists() and _ken_burns(path, dest, W, H, fps, duration, int(scene.get("index") or 0)):
-        return
+    kind = (visual.get("kind") or "").lower()
+    if path and Path(path).exists():
+        suffix = Path(path).suffix.lower()
+        if kind == "video" or suffix in {".mp4", ".webm", ".mov", ".mkv", ".ogv"}:
+            if _render_clip(path, dest, W, H, fps, duration):
+                return
+        if _cover_still(path, dest, W, H, fps, duration, int(scene.get("index") or 0)):
+            return
     _generated_scene(dest, W, H, fps, duration, int(scene.get("index") or 0))
 
-def _ken_burns(src, dest, W, H, fps, duration, index):
-    sharp = Path(src).with_name(Path(src).stem + "_sharp.jpg")
-    if not _pre_sharpen(src, sharp, W, H):
-        sharp = Path(src)
-    z0, z1 = 1.02, 1.10 if index % 2 == 0 else 1.08
-    frames = max(1, int(duration * fps))
-    vf = (
-        f"scale=1920:-2:flags=lanczos,"
-        f"zoompan=z='{z0}+({z1}-{z0})*on/{frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={W}x{H}:fps={fps},"
-        f"unsharp=5:5:0.8:5:5:0.0,"
-        f"eq=contrast=1.06:saturation=1.08:brightness=0.02"
+def _natural_vf(W, H):
+    return (
+        f"scale={W}:{H}:force_original_aspect_ratio=increase:flags=lanczos,"
+        f"crop={W}:{H},"
+        f"eq=contrast=1.02:saturation=0.97:brightness=0.01,"
+        f"noise=alls=3:allf=t+u,"
+        f"format=yuv420p"
     )
+
+def _render_clip(src, dest, W, H, fps, duration):
+    vf = _natural_vf(W, H)
     cmd = [
-        "ffmpeg", "-y", "-loop", "1", "-i", str(sharp),
+        "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(src),
         "-t", f"{duration:.3f}", "-vf", vf, "-an",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "17",
+        "-r", str(fps), "-c:v", "libx264", "-preset", "fast", "-crf", "16",
         "-pix_fmt", "yuv420p", str(dest),
     ]
     return _run(cmd) and dest.exists()
 
-def _pre_sharpen(src, dest: Path, W, H):
-    try:
-        img = Image.open(src).convert("RGB")
-        img.thumbnail((max(W * 2, 2160), max(H * 2, 3840)), Image.Resampling.LANCZOS)
-        img = ImageEnhance.Sharpness(img).enhance(1.25)
-        img = ImageEnhance.Contrast(img).enhance(1.06)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        img.save(dest, "JPEG", quality=95, optimize=True)
-        return dest.exists()
-    except Exception:
-        return False
+def _cover_still(src, dest, W, H, fps, duration, index):
+    z0 = 1.0
+    z1 = 1.04 if index % 2 == 0 else 1.03
+    frames = max(1, int(duration * fps))
+    vf = (
+        f"scale=2160:-2:flags=lanczos,"
+        f"zoompan=z='{z0}+({z1}-{z0})*on/{frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={frames}:s={W}x{H}:fps={fps},"
+        f"eq=contrast=1.02:saturation=0.97:brightness=0.01,"
+        f"noise=alls=3:allf=t+u"
+    )
+    cmd = [
+        "ffmpeg", "-y", "-loop", "1", "-i", str(src),
+        "-t", f"{duration:.3f}", "-vf", vf, "-an",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "16",
+        "-pix_fmt", "yuv420p", str(dest),
+    ]
+    return _run(cmd) and dest.exists()
 
 def _generated_scene(dest, W, H, fps, duration, index):
-    palettes = [("#0c1226", "#225c8c"), ("#140c20", "#5c285a"), ("#081c18", "#185a46"), ("#1c100a", "#78461c")]
+    palettes = [("#101418", "#2a3540"), ("#16120f", "#3a322c"), ("#101614", "#2c3a34")]
     c1, c2 = palettes[index % len(palettes)]
     img_path = dest.with_suffix(".png")
     _write_gradient(img_path, W, H, c1, c2)
-    if not _ken_burns(str(img_path), dest, W, H, fps, duration, index):
-        cmd = ["ffmpeg", "-y", "-loop", "1", "-i", str(img_path), "-t", f"{duration:.3f}", "-vf", f"scale={W}:{H}:flags=lanczos", "-c:v", "libx264", "-crf", "17", "-pix_fmt", "yuv420p", str(dest)]
+    if not _cover_still(str(img_path), dest, W, H, fps, duration, index):
+        cmd = ["ffmpeg", "-y", "-loop", "1", "-i", str(img_path), "-t", f"{duration:.3f}", "-vf", f"scale={W}:{H}", "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", str(dest)]
         if not _run(cmd):
             raise RuntimeError("Could not create fallback scene")
 
@@ -127,7 +138,7 @@ def _ffmpeg_concat(files, dest, fps):
         raise RuntimeError("FFmpeg concat failed")
 
 def _fit_length(src, dest, duration, fps):
-    if not _run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(src), "-t", f"{duration:.3f}", "-c:v", "libx264", "-preset", "fast", "-crf", "17", "-pix_fmt", "yuv420p", "-r", str(fps), str(dest)]):
+    if not _run(["ffmpeg", "-y", "-stream_loop", "-1", "-i", str(src), "-t", f"{duration:.3f}", "-c:v", "libx264", "-preset", "fast", "-crf", "16", "-pix_fmt", "yuv420p", "-r", str(fps), str(dest)]):
         raise RuntimeError("Could not fit video length to narration")
 
 def _write_ass(groups, path, W, H, cap_cfg, hook_card=""):
@@ -155,7 +166,7 @@ def _ass_time(seconds):
 def _burn_subtitles(video, ass_path, dest):
     fonts = "/usr/share/fonts/truetype/lato"
     filt = f"ass={ass_path.resolve().as_posix()}:fontsdir={fonts}"
-    if not _run(["ffmpeg", "-y", "-i", str(video), "-vf", filt, "-c:v", "libx264", "-preset", "fast", "-crf", "17", "-pix_fmt", "yuv420p", "-an", str(dest)]):
+    if not _run(["ffmpeg", "-y", "-i", str(video), "-vf", filt, "-c:v", "libx264", "-preset", "fast", "-crf", "16", "-pix_fmt", "yuv420p", "-an", str(dest)]):
         warn("Caption burn failed, exporting without captions")
         subprocess.run(["cp", str(video), str(dest)], check=False)
 
@@ -172,7 +183,7 @@ def _mix_audio(narration, music_path, dest, duration, music_cfg):
 def _mux(video, audio, dest):
     if _run(["ffmpeg", "-y", "-i", str(video), "-i", str(audio), "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", str(dest)]):
         return
-    if not _run(["ffmpeg", "-y", "-i", str(video), "-i", str(audio), "-c:v", "libx264", "-crf", "17", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(dest)]):
+    if not _run(["ffmpeg", "-y", "-i", str(video), "-i", str(audio), "-c:v", "libx264", "-crf", "16", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(dest)]):
         raise RuntimeError("Final mux failed")
 
 def _run(cmd):

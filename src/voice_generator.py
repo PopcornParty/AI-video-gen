@@ -1,20 +1,22 @@
 """Natural TTS via Microsoft Edge (free, no key) with gTTS fallback."""
 from __future__ import annotations
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
 from .utils import cache_path, info, save_json, warn
 
 def generate_voice(text, cache_dir: Path, voice_cfg: dict[str, Any], work_dir: Path):
+    spoken = _humanize_script(text)
     provider = (voice_cfg.get("provider") or "edge").lower()
     fallback = (voice_cfg.get("fallback_provider") or "gtts").lower()
     last_error = None
     for name in (provider, fallback, "edge", "gtts"):
         try:
             if name == "edge":
-                result = _edge_tts(text, cache_dir, voice_cfg)
+                result = _edge_tts(spoken, cache_dir, voice_cfg)
             elif name == "gtts":
-                result = _gtts(text, cache_dir, voice_cfg)
+                result = _gtts(spoken, cache_dir, voice_cfg)
             else:
                 continue
             if result and Path(result["audio_path"]).exists():
@@ -25,12 +27,31 @@ def generate_voice(text, cache_dir: Path, voice_cfg: dict[str, Any], work_dir: P
             warn(f"{name} voice failed: {exc}")
     raise RuntimeError(f"All voice providers failed: {last_error}")
 
+def _humanize_script(text: str) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text.replace(" — ", ", ").replace(" – ", ", ")
+    text = re.sub(r"\s*\.\s*", ". ", text)
+    text = re.sub(r"\s*,\s*", ", ", text)
+    parts = re.split(r"(?<=[.!?])\s+", text)
+    out = []
+    for i, part in enumerate(parts):
+        part = part.strip()
+        if not part:
+            continue
+        if i > 0 and len(part.split()) > 8:
+            out.append(part)
+        else:
+            out.append(part)
+    spoken = " ".join(out)
+    spoken = spoken.replace("...", ".")
+    return spoken
+
 def _edge_tts(text, cache_dir, voice_cfg):
     import edge_tts
     voice = voice_cfg.get("voice") or "en-US-AndrewNeural"
-    rate = voice_cfg.get("rate") or "+8%"
-    pitch = voice_cfg.get("pitch") or "+0Hz"
-    audio_path = cache_path(cache_dir, "audio", f"edge:{voice}:{rate}:{text}", "mp3")
+    rate = voice_cfg.get("rate") or "-6%"
+    pitch = voice_cfg.get("pitch") or "-1Hz"
+    audio_path = cache_path(cache_dir, "audio", f"edge:{voice}:{rate}:{pitch}:{text}", "mp3")
     words_path = audio_path.with_suffix(".words.json")
     if audio_path.exists() and words_path.exists() and audio_path.stat().st_size > 2000:
         from .utils import load_json
