@@ -1,7 +1,7 @@
 """Write a Shorts script from researched facts. No API key required."""
 from __future__ import annotations
 import re
-from .research import clean_topic_query, is_tips_topic, topic_tokens, visual_lookups
+from .research import clean_topic_query, is_tips_topic, specific_tokens, visual_lookups
 from .utils import info, unique_keep_order
 
 def generate_script(research, target_duration=45, language="en"):
@@ -21,17 +21,25 @@ def _compose_narration(script):
     parts = [script.get("hook", "")] + list(script.get("body") or []) + [script.get("ending", "")]
     return re.sub(r"\s+", " ", " ".join(p.strip() for p in parts if p and p.strip())).strip()
 
+def _focus_label(topic):
+    specific = specific_tokens(topic)
+    return " ".join(specific) if specific else clean_topic_query(topic)
+
 def _tips_script(topic, facts, target_duration):
-    label = clean_topic_query(topic)
-    hook = f"This is {label}. Not the origin story of the game."
+    label = _focus_label(topic)
+    hook = f"This is {label}. Not the origin story of the bigger topic."
     body = []
-    for fact in unique_keep_order([_tighten(f) for f in facts])[:6]:
+    for fact in unique_keep_order([_tighten(f) for f in facts])[:8]:
         low = fact.lower()
-        if any(w in low for w in ("developed", "mojang", "released", "sandbox", "studio")):
+        if any(w in low for w in ("developed by", "published by", "founded by", "released in", "headquarters")):
             continue
         body.append(fact)
     if len(body) < 3:
-        body = unique_keep_order(body + _fallback_tips(topic, label))
+        body = unique_keep_order(body + [
+            f"The useful part of {label} is how you actually use it.",
+            f"Keep the steps on {label}, not a generic overview.",
+            f"If a detail is not about {label}, skip it.",
+        ])
     budget = max(55, int(target_duration * 2.4))
     kept = []
     used = len(hook.split())
@@ -42,19 +50,8 @@ def _tips_script(topic, facts, target_duration):
         used += len(line.split())
     return {"hook": hook, "body": kept or body[:3], "ending": f"Follow for more {label}.", "title_seed": label, "provider": "tips"}
 
-def _fallback_tips(topic, label):
-    low = topic.lower()
-    if "crystal" in low and "minecraft" in low:
-        return [
-            "Use end crystals, not random swords-only advice.",
-            "Place a crystal on obsidian or bedrock, then detonate it.",
-            "Move after you place it. The blast can hit you too.",
-            "Keep obsidian ready so you can place another crystal fast.",
-        ]
-    return [f"Stay on {label} and skip the company history.", f"Focus on how {label} is actually used."]
-
 def _template_script(topic, facts, target_duration):
-    label = clean_topic_query(topic)
+    label = _focus_label(topic)
     usable = unique_keep_order([_tighten(f) for f in facts if len(f) > 35])[:8]
     if not usable:
         usable = [f"The details behind {label} are what people usually miss."]
@@ -108,17 +105,18 @@ def _plan_scenes(script, research):
 _STOP = {
     "this", "that", "with", "from", "have", "most", "people", "about", "follow",
     "short", "facts", "true", "real", "want", "like", "more", "next", "origin",
-    "story", "company", "history", "category",
+    "story", "company", "history", "category", "bigger", "generic", "overview",
 }
 
 def _query_variants(text, topic, lookups, index):
-    subject = clean_topic_query(topic)
+    subject = _focus_label(topic)
     variants = []
     if lookups:
         variants.append(lookups[index % len(lookups)])
         variants.extend(lookups)
     sentence_words = [w for w in re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", text) if w.lower() not in _STOP]
     if sentence_words:
+        variants.insert(0, " ".join(sentence_words[:6]))
         variants.append(f"{subject} {' '.join(sentence_words[:4])}")
     variants.append(subject)
     cleaned = []
