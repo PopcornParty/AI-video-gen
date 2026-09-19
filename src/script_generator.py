@@ -1,15 +1,17 @@
 """Write a Shorts script from researched facts. No API key required."""
 from __future__ import annotations
 import re
-from typing import Any
-from .research import clean_topic_query, topic_tokens
+from .research import clean_topic_query, is_tips_topic, topic_tokens, visual_lookups
 from .utils import info, unique_keep_order
 
 def generate_script(research, target_duration=45, language="en"):
     facts = research.get("facts") or []
     topic = research.get("topic") or "this topic"
-    info("Script written from Wikipedia facts (no LLM key)")
-    script = _template_script(topic, facts, target_duration)
+    info("Script written from on-topic research")
+    if is_tips_topic(topic) or research.get("tips_topic"):
+        script = _tips_script(topic, facts, target_duration)
+    else:
+        script = _template_script(topic, facts, target_duration)
     script["full_narration"] = _compose_narration(script)
     script["scenes"] = _plan_scenes(script, research)
     script["sources"] = research.get("sources") or []
@@ -19,12 +21,44 @@ def _compose_narration(script):
     parts = [script.get("hook", "")] + list(script.get("body") or []) + [script.get("ending", "")]
     return re.sub(r"\s+", " ", " ".join(p.strip() for p in parts if p and p.strip())).strip()
 
+def _tips_script(topic, facts, target_duration):
+    label = clean_topic_query(topic)
+    hook = f"This is {label}. Not the origin story of the game."
+    body = []
+    for fact in unique_keep_order([_tighten(f) for f in facts])[:6]:
+        low = fact.lower()
+        if any(w in low for w in ("developed", "mojang", "released", "sandbox", "studio")):
+            continue
+        body.append(fact)
+    if len(body) < 3:
+        body = unique_keep_order(body + _fallback_tips(topic, label))
+    budget = max(55, int(target_duration * 2.4))
+    kept = []
+    used = len(hook.split())
+    for line in body:
+        if used + len(line.split()) > budget:
+            break
+        kept.append(line)
+        used += len(line.split())
+    return {"hook": hook, "body": kept or body[:3], "ending": f"Follow for more {label}.", "title_seed": label, "provider": "tips"}
+
+def _fallback_tips(topic, label):
+    low = topic.lower()
+    if "crystal" in low and "minecraft" in low:
+        return [
+            "Use end crystals, not random swords-only advice.",
+            "Place a crystal on obsidian or bedrock, then detonate it.",
+            "Move after you place it. The blast can hit you too.",
+            "Keep obsidian ready so you can place another crystal fast.",
+        ]
+    return [f"Stay on {label} and skip the company history.", f"Focus on how {label} is actually used."]
+
 def _template_script(topic, facts, target_duration):
     label = clean_topic_query(topic)
     usable = unique_keep_order([_tighten(f) for f in facts if len(f) > 35])[:8]
     if not usable:
         usable = [f"The details behind {label} are what people usually miss."]
-    hook = _hook_from_fact(topic, usable[0])
+    hook = f"This is about {label}. {_tighten(usable[0])}"
     budget = max(55, int(target_duration * 2.4))
     body = []
     used = len(hook.split())
@@ -34,20 +68,7 @@ def _template_script(topic, facts, target_duration):
         if fact.lower() not in hook.lower():
             body.append(fact)
             used += len(fact.split())
-    if not body:
-        body = [usable[0]]
-    return {
-        "hook": hook,
-        "body": body,
-        "ending": f"Follow if you want more on {label}.",
-        "title_seed": label,
-        "provider": "template",
-    }
-
-def _hook_from_fact(topic, fact):
-    label = clean_topic_query(topic)
-    clean = _tighten(fact)
-    return f"This is about {label}, not the whole category around it. {clean}"
+    return {"hook": hook, "body": body or [usable[0]], "ending": f"Follow if you want more on {label}.", "title_seed": label, "provider": "template"}
 
 def _tighten(sentence):
     s = re.sub(r"\s+", " ", sentence).strip()
@@ -64,11 +85,11 @@ def _plan_scenes(script, research):
     units = [script.get("hook", "")] + list(script.get("body") or []) + [script.get("ending", "")]
     units = [u.strip() for u in units if u and u.strip()]
     topic = research.get("topic") or ""
-    keywords = research.get("keywords") or []
+    lookups = research.get("visual_lookups") or visual_lookups(topic)
     used_queries = set()
     scenes = []
     for i, text in enumerate(units):
-        variants = _query_variants(text, topic, keywords, i)
+        variants = _query_variants(text, topic, lookups, i)
         query = variants[0]
         for item in variants:
             if item.lower() not in used_queries:
@@ -85,28 +106,21 @@ def _plan_scenes(script, research):
     return scenes
 
 _STOP = {
-    "this", "that", "with", "from", "have", "most", "people", "about", "actually",
-    "follow", "short", "facts", "fact", "true", "real", "never", "hear", "want",
-    "like", "more", "next", "stop", "scrolling", "amazing", "insane", "idea",
-    "simply", "often", "usually", "called", "known", "also", "their", "them",
-    "category", "around", "whole", "public", "guides",
+    "this", "that", "with", "from", "have", "most", "people", "about", "follow",
+    "short", "facts", "true", "real", "want", "like", "more", "next", "origin",
+    "story", "company", "history", "category",
 }
 
-def _query_variants(text, topic, keywords, index):
+def _query_variants(text, topic, lookups, index):
     subject = clean_topic_query(topic)
-    tokens = topic_tokens(topic)
-    sentence_words = [w for w in re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", text) if w.lower() not in _STOP]
     variants = []
+    if lookups:
+        variants.append(lookups[index % len(lookups)])
+        variants.extend(lookups)
+    sentence_words = [w for w in re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", text) if w.lower() not in _STOP]
     if sentence_words:
-        variants.append(f"{subject} {' '.join(sentence_words[:5])}")
-        variants.append(" ".join(sentence_words[:6]))
+        variants.append(f"{subject} {' '.join(sentence_words[:4])}")
     variants.append(subject)
-    if tokens:
-        variants.append(" ".join(tokens))
-    if keywords:
-        variants.append(f"{subject} {keywords[min(index, len(keywords) - 1)]}")
-    variants.append(f"{subject} screenshot")
-    variants.append(f"{subject} gameplay")
     cleaned = []
     for query in variants:
         query = re.sub(r"\s+", " ", query).strip()[:80]

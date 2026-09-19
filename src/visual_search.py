@@ -1,26 +1,31 @@
-"""Find royalty-free images. Works with zero API keys via Wikimedia."""
+"""Find royalty-free images. Works with zero API keys via Wikimedia and Wikipedia."""
 from __future__ import annotations
 from pathlib import Path
 from .config_loader import env
+from .research import visual_lookups
 from .utils import cache_path, download_file, extension_from_url, http_get, info, warn
 
 def find_visuals_for_scenes(scenes, topic, cache_dir: Path, visuals_cfg):
     used_urls = set()
     used_paths = set()
     results = []
+    extras = visual_lookups(topic)
     for scene in scenes:
         queries = list(scene.get("search_queries") or [])
         main = scene.get("search_query") or topic
         if main not in queries:
             queries.insert(0, main)
-        if topic not in queries:
-            queries.append(topic)
+        for extra in extras:
+            if extra not in queries:
+                queries.append(extra)
         info(f"Visual search: {main}")
         asset = None
         for query in queries:
             asset = _search_image(query, cache_dir, used_urls, used_paths)
             if asset:
                 break
+        if asset is None:
+            asset = _wikipedia_thumb(queries[0] if queries else topic, cache_dir, used_urls, used_paths)
         if asset is None:
             warn(f"No new media for '{main}', will use generated backdrop")
             asset = {"kind": "generated", "path": None, "query": main, "source": "generated", "attribution": ""}
@@ -34,7 +39,7 @@ def find_visuals_for_scenes(scenes, topic, cache_dir: Path, visuals_cfg):
     return results
 
 def _search_image(query, cache_dir, used_urls, used_paths):
-    for fn in (_wikimedia_images, _pexels_photos, _pixabay_photos):
+    for fn in (_wikimedia_images, _wikipedia_search_images, _pexels_photos, _pixabay_photos):
         try:
             hits = fn(query)
         except Exception as exc:
@@ -44,6 +49,10 @@ def _search_image(query, cache_dir, used_urls, used_paths):
         if asset:
             return asset
     return None
+
+def _wikipedia_thumb(title, cache_dir, used_urls, used_paths):
+    hits = _wikipedia_search_images(title)
+    return _download_first(hits, cache_dir, used_urls, used_paths)
 
 def _download_first(hits, cache_dir, used_urls, used_paths):
     for hit in hits:
@@ -70,7 +79,7 @@ def _wikimedia_images(query):
         params={
             "action": "query",
             "generator": "search",
-            "gsrsearch": f"{query} filetype:bitmap",
+            "gsrsearch": query,
             "gsrnamespace": "6",
             "gsrlimit": "16",
             "prop": "imageinfo",
@@ -83,7 +92,7 @@ def _wikimedia_images(query):
         return []
     pages = resp.json().get("query", {}).get("pages", {})
     out = []
-    skip = ("logo", "icon", "flag of", "coat of arms", "svg", "map of")
+    skip = ("logo", "icon", "flag of", "coat of arms", "svg", "map of", "wordmark")
     for page in pages.values():
         title = (page.get("title") or "").lower()
         if any(s in title for s in skip):
@@ -98,12 +107,33 @@ def _wikimedia_images(query):
         url = info_.get("thumburl") or info_.get("url")
         if not url:
             continue
-        out.append({
-            "url": url,
-            "source": "wikimedia",
-            "query": query,
-            "attribution": f"{page.get('title', 'Wikimedia')} — Wikimedia Commons",
-        })
+        out.append({"url": url, "source": "wikimedia", "query": query, "attribution": f"{page.get('title', 'Wikimedia')} — Wikimedia Commons"})
+    return out
+
+def _wikipedia_search_images(query):
+    resp = http_get(
+        "https://en.wikipedia.org/w/api.php",
+        params={
+            "action": "query",
+            "generator": "search",
+            "gsrsearch": query,
+            "gsrlimit": "8",
+            "prop": "pageimages",
+            "piprop": "thumbnail",
+            "pithumbsize": "1280",
+            "format": "json",
+        },
+    )
+    if resp is None:
+        return []
+    pages = resp.json().get("query", {}).get("pages", {})
+    out = []
+    for page in pages.values():
+        thumb = page.get("thumbnail") or {}
+        url = thumb.get("source")
+        if not url:
+            continue
+        out.append({"url": url, "source": "wikipedia", "query": query, "attribution": f"{page.get('title', 'Wikipedia')} — Wikipedia"})
     return out
 
 def _pexels_photos(query):
