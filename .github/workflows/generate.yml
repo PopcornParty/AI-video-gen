@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "How to pick the topic"
+        description: "How to pick the topic. Use simulation for a silent visual."
         required: true
         type: choice
         default: prompt
@@ -12,11 +12,12 @@ on:
           - prompt
           - category
           - random
+          - simulation
       category:
-        description: "Minecraft category (used when mode is category or random)"
+        description: "Minecraft category"
         required: false
         type: choice
-        default: crystal-pvp
+        default: items
         options:
           - crystal-pvp
           - pvp
@@ -27,14 +28,28 @@ on:
           - mobs
           - items
           - building
+          - simulation
+      simulation_type:
+        description: "Simulation subtype (only used when mode or category is simulation)"
+        required: false
+        type: choice
+        default: crystal
+        options:
+          - crystal
+          - redstone
+          - gravity
+          - portal
+          - life
+          - fire
+          - rain
       topic:
         description: "Your Minecraft prompt (used when mode is prompt)"
         required: false
-        default: "Minecraft crystal PvP tips"
+        default: "Minecraft totem of undying"
       duration:
-        description: "Target length in seconds (22-45 works best)"
+        description: "Video length in seconds"
         required: false
-        default: "32"
+        default: "34"
 
 jobs:
   generate:
@@ -63,7 +78,7 @@ jobs:
 
       - name: Generate Short (no API keys)
         run: |
-          python main.py --mode "${{ github.event.inputs.mode }}" --category "${{ github.event.inputs.category }}" --topic "${{ github.event.inputs.topic }}" --duration ${{ github.event.inputs.duration }}
+          python main.py --mode "${{ github.event.inputs.mode }}" --category "${{ github.event.inputs.category }}" --simulation-type "${{ github.event.inputs.simulation_type }}" --topic "${{ github.event.inputs.topic }}" --duration ${{ github.event.inputs.duration }}
 
       - name: Prepare download folder
         run: |
@@ -78,18 +93,16 @@ jobs:
           if [ -f "$RUNDIR/hashtags.txt" ]; then
             cp "$RUNDIR/hashtags.txt" youtube-upload/youtube-hashtags.txt
           else
-            grep -oE '#[A-Za-z0-9_]+' "$RUNDIR/description.txt" | tr '\n' ' ' > youtube-upload/youtube-hashtags.txt || true
-            echo >> youtube-upload/youtube-hashtags.txt
+            echo "#Shorts #Minecraft" > youtube-upload/youtube-hashtags.txt
           fi
           cp "$RUNDIR/tags.txt" youtube-upload/youtube-tags.txt || true
           {
             echo "Mode: ${{ github.event.inputs.mode }}"
             echo "Category: ${{ github.event.inputs.category }}"
-            echo "Prompt: ${{ github.event.inputs.topic }}"
-            echo "On iPhone: unzip if needed, then tap video.mp4."
+            echo "Simulation: ${{ github.event.inputs.simulation_type }}"
+            echo "Duration: ${{ github.event.inputs.duration }}"
           } > youtube-upload/README.txt
-          echo "----- TITLE -----"
-          cat youtube-upload/youtube-title.txt
+          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 youtube-upload/video.mp4 || true
 
       - name: Upload Short files
         uses: actions/upload-artifact@v4

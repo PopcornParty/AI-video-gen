@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+from src.audio_pad import pad_audio_to
 from src.captions import group_captions, write_srt
 from src.catalog import category_names, lineup_size, pick_topic
 from src.config_loader import load_config
@@ -20,6 +21,7 @@ from src.music import get_music_track
 from src.research import research_topic
 from src.scene_generator import build_timed_scenes
 from src.script_generator import generate_script
+from src.simulation import render_simulation, simulation_types
 from src.utils import ensure_dir, info, save_json, save_text, slugify, step, warn
 from src.video_editor import render_short
 from src.visual_search import find_visuals_for_scenes
@@ -29,9 +31,10 @@ TOTAL_STEPS = 8
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate YouTube Shorts from a topic.")
-    parser.add_argument("--topic", "-t", default="", help="Used when mode=prompt")
-    parser.add_argument("--mode", choices=["prompt", "category", "random"], default="prompt")
-    parser.add_argument("--category", default="crystal-pvp")
+    parser.add_argument("--topic", "-t", default="")
+    parser.add_argument("--mode", choices=["prompt", "category", "random", "simulation"], default="prompt")
+    parser.add_argument("--category", default="items")
+    parser.add_argument("--simulation-type", default="crystal", help="crystal, redstone, gravity, portal, life, fire, rain")
     parser.add_argument("--topics-file", default=str(ROOT / "topics.txt"))
     parser.add_argument("--config", default=str(ROOT / "config.json"))
     parser.add_argument("--duration", type=int)
@@ -40,24 +43,26 @@ def parse_args():
     return parser.parse_args()
 
 def load_topics(args):
-    if args.mode in {"category", "random"} or (args.mode == "prompt" and args.topic.strip()):
-        topic = pick_topic(args.mode, args.category, args.topic)
+    if args.mode in {"category", "random", "prompt"} or args.topic.strip():
+        topic = pick_topic(args.mode if args.mode != "simulation" else "prompt", args.category, args.topic)
         info(f"Catalog size: {lineup_size():,} possible Minecraft topic lines")
         info(f"Picked topic: {topic}")
         return [topic]
-    if args.topic:
-        return [args.topic.strip()]
-    path = Path(args.topics_file)
-    if path.exists():
-        lines = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.strip().startswith("#")]
-        if args.all:
-            return lines
-        if lines:
-            return [lines[0]]
-    return [pick_topic("random", "crystal-pvp", "")]
+    return [pick_topic("random", "items", "")]
+
+def generate_simulation(args, cfg):
+    out_root = ensure_dir(ROOT / cfg.get("output_folder", "output"))
+    work_dir = ensure_dir(ROOT / "tmp" / "simulation")
+    duration = float(cfg["video"].get("target_duration", 34))
+    video = render_simulation(args.simulation_type, duration, cfg, out_root, work_dir)
+    print("\nVIDEO COMPLETE\n")
+    print(f"Video:\n{video}")
+    print("Silent simulation. No voice. No captions.")
+    return video
 
 def generate_one(topic, cfg):
     video_cfg = cfg["video"]
+    target = float(video_cfg.get("target_duration", 32))
     out_root = ensure_dir(ROOT / cfg.get("output_folder", "output"))
     cache_dir = ensure_dir(ROOT / cfg.get("cache_folder", "cache"))
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -70,21 +75,21 @@ def generate_one(topic, cfg):
     save_json(run_dir / "research.json", research)
     save_text(run_dir / "sources.txt", sources_text(research))
     step(2, TOTAL_STEPS, "Writing script...")
-    script = generate_script(research, target_duration=int(video_cfg.get("target_duration", 45)), language=cfg.get("language", "en"))
+    script = generate_script(research, target_duration=int(target), language=cfg.get("language", "en"))
     save_json(run_dir / "script.json", script)
     save_text(run_dir / "script.txt", script.get("full_narration", ""))
     info(f"Narration words: {len(script.get('full_narration', '').split())}")
     step(3, TOTAL_STEPS, "Generating voice...")
     voice = generate_voice(script["full_narration"], cache_dir=cache_dir, voice_cfg=cfg["voice"], work_dir=work_dir)
-    audio_path = Path(voice["audio_path"])
+    audio_path = pad_audio_to(Path(voice["audio_path"]), work_dir / "narration_padded.m4a", target)
     shutil.copy2(audio_path, run_dir / "narration.mp3")
     save_json(run_dir / "words.json", voice.get("words") or [])
     audio_duration = float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)], text=True).strip())
-    info(f"Voice length: {audio_duration:.1f}s")
+    info(f"Voice+pad length: {audio_duration:.1f}s")
     step(4, TOTAL_STEPS, "Finding visuals...")
     scenes = find_visuals_for_scenes(script.get("scenes") or [], topic, cache_dir, cfg.get("visuals") or {})
     step(5, TOTAL_STEPS, "Building scenes...")
-    timed = build_timed_scenes(scenes, voice.get("words") or [], audio_duration, float(video_cfg.get("target_duration", 45)))
+    timed = build_timed_scenes(scenes, voice.get("words") or [], audio_duration, target)
     save_json(run_dir / "scenes.json", timed)
     step(6, TOTAL_STEPS, "Creating captions...")
     groups = group_captions(voice.get("words") or [], max_words=int(cfg["captions"].get("max_words_per_line", 5)))
@@ -113,12 +118,21 @@ def main():
     args = parse_args()
     cfg = load_config(Path(args.config))
     if args.duration:
-        cfg["video"]["target_duration"] = max(15, min(59, args.duration))
+        cfg["video"]["target_duration"] = max(8, min(58, args.duration))
     if args.no_music:
         cfg["music"]["enabled"] = False
+    if args.mode == "simulation" or args.category == "simulation":
+        try:
+            generate_simulation(args, cfg)
+            return 0
+        except Exception as exc:
+            warn(f"Simulation failed: {exc}")
+            import traceback
+            traceback.print_exc()
+            return 1
     if args.category and args.category not in category_names() and args.mode != "prompt":
-        warn(f"Unknown category '{args.category}', using crystal-pvp")
-        args.category = "crystal-pvp"
+        warn(f"Unknown category '{args.category}', using items")
+        args.category = "items"
     topics = load_topics(args)
     if not topics:
         warn("No topic provided.")
