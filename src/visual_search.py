@@ -1,6 +1,5 @@
-"""Find royalty-free video clips and photos via Wikimedia."""
+"""Find royalty-free video clips, gifs, and photos. Videos first when they exist."""
 from __future__ import annotations
-import re
 from pathlib import Path
 from .config_loader import env
 from .research import visual_lookups
@@ -11,6 +10,7 @@ def find_visuals_for_scenes(scenes, topic, cache_dir: Path, visuals_cfg):
     used_paths = set()
     results = []
     extras = visual_lookups(topic)
+    video_first = list(visuals_cfg.get("prefer_video", True) and extras or extras)
     for scene in scenes:
         queries = list(scene.get("search_queries") or [])
         main = scene.get("search_query") or topic
@@ -22,12 +22,12 @@ def find_visuals_for_scenes(scenes, topic, cache_dir: Path, visuals_cfg):
         tokens = [t.lower() for t in (scene.get("match_tokens") or []) if len(t) > 2]
         info(f"Visual search: {main}")
         asset = None
-        for query in queries:
+        for query in queries[:8]:
             asset = _search_video(query, cache_dir, used_urls, used_paths, tokens)
             if asset:
                 break
         if asset is None:
-            for query in queries:
+            for query in queries[:8]:
                 asset = _search_image(query, cache_dir, used_urls, used_paths, tokens)
                 if asset:
                     break
@@ -38,6 +38,7 @@ def find_visuals_for_scenes(scenes, topic, cache_dir: Path, visuals_cfg):
             used_urls.add(asset.get("url") or "")
             if asset.get("path"):
                 used_paths.add(asset["path"])
+            info(f"Using {asset.get('kind')} from {asset.get('source')}")
         out = dict(scene)
         out["visual"] = asset
         results.append(out)
@@ -51,11 +52,12 @@ def _score(hit, tokens):
     return hits * 1000 + int(hit.get("width") or 0)
 
 def _search_video(query, cache_dir, used_urls, used_paths, tokens):
+    hits = []
     try:
-        hits = _wikimedia_videos(query)
+        hits.extend(_wikimedia_videos(query))
+        hits.extend(_wikimedia_videos(f"Minecraft {query}"))
     except Exception as exc:
         warn(f"video search error: {exc}")
-        hits = []
     return _download_first(hits, cache_dir, used_urls, used_paths, tokens)
 
 def _search_image(query, cache_dir, used_urls, used_paths, tokens):
@@ -86,7 +88,7 @@ def _download_first(hits, cache_dir, used_urls, used_paths, tokens):
             continue
         if download_file(url, dest, headers=hit.get("headers")):
             return {
-                "kind": hit.get("kind") or ("video" if ext in {".mp4", ".webm", ".mov"} else "image"),
+                "kind": hit.get("kind") or ("video" if ext in {".mp4", ".webm", ".mov", ".ogv", ".gif"} else "image"),
                 "path": str(dest),
                 "url": url,
                 "query": hit.get("query", ""),
@@ -102,9 +104,9 @@ def _wikimedia_videos(query):
         params={
             "action": "query",
             "generator": "search",
-            "gsrsearch": f"{query} filetype:video",
+            "gsrsearch": f"{query} (filetype:video OR filetype:gif)",
             "gsrnamespace": "6",
-            "gsrlimit": "10",
+            "gsrlimit": "12",
             "prop": "imageinfo",
             "iiprop": "url|mime|size",
             "format": "json",
@@ -112,7 +114,7 @@ def _wikimedia_videos(query):
     )
     if resp is None:
         return []
-    pages = resp.json().get("query", {}).get("pages", {})
+    pages = (resp.json().get("query") or {}).get("pages", {})
     out = []
     for page in pages.values():
         infos = page.get("imageinfo") or []
@@ -120,10 +122,10 @@ def _wikimedia_videos(query):
             continue
         info_ = infos[0]
         mime = (info_.get("mime") or "").lower()
-        if mime not in {"video/mp4", "video/webm", "video/ogg"}:
+        if mime not in {"video/mp4", "video/webm", "video/ogg", "image/gif"}:
             continue
         size = int(info_.get("size") or 0)
-        if size and (size < 80_000 or size > 40_000_000):
+        if size and (size < 20_000 or size > 40_000_000):
             continue
         url = info_.get("url")
         if not url:
@@ -156,7 +158,7 @@ def _wikimedia_images(query):
     )
     if resp is None:
         return []
-    pages = resp.json().get("query", {}).get("pages", {})
+    pages = (resp.json().get("query") or {}).get("pages", {})
     out = []
     skip = ("logo", "icon", "flag of", "coat of arms", "svg", "map of", "wordmark")
     for page in pages.values():
@@ -168,15 +170,15 @@ def _wikimedia_images(query):
             continue
         info_ = infos[0]
         mime = (info_.get("mime") or "").lower()
-        if mime not in {"image/jpeg", "image/png", "image/webp"}:
+        if mime not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
             continue
         width = int(info_.get("thumbwidth") or info_.get("width") or 0)
         height = int(info_.get("thumbheight") or info_.get("height") or 0)
-        if width < 1000 and height < 1000:
+        if width < 800 and height < 800:
             continue
         url = info_.get("thumburl") or info_.get("url")
         orig_w = int(info_.get("width") or 0)
-        if info_.get("url") and orig_w >= 1600:
+        if info_.get("url") and orig_w >= 1400:
             url = info_.get("url")
             width = orig_w
         if not url:
@@ -185,7 +187,7 @@ def _wikimedia_images(query):
             "url": url,
             "title": title,
             "width": width,
-            "kind": "image",
+            "kind": "video" if mime == "image/gif" else "image",
             "source": "wikimedia",
             "query": query,
             "attribution": f"{title} — Wikimedia Commons",
@@ -208,7 +210,7 @@ def _wikipedia_search_images(query):
     )
     if resp is None:
         return []
-    pages = resp.json().get("query", {}).get("pages", {})
+    pages = (resp.json().get("query") or {}).get("pages", {})
     out = []
     for page in pages.values():
         thumb = page.get("thumbnail") or {}
@@ -216,7 +218,7 @@ def _wikipedia_search_images(query):
         if not url:
             continue
         width = int(thumb.get("width") or 0)
-        if width and width < 800:
+        if width and width < 700:
             continue
         title = page.get("title", "")
         out.append({"url": url, "title": title, "width": width, "kind": "image", "source": "wikipedia", "query": query, "attribution": f"{title} — Wikipedia"})
