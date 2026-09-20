@@ -1,4 +1,4 @@
-"""Huge topic lineup plus category / random / prompt picker."""
+"""Minecraft-only topic lineup plus category / random / prompt picker."""
 from __future__ import annotations
 import random
 from typing import Optional
@@ -12,7 +12,6 @@ ANGLES = [
     "simple rules",
     "surprising details",
     "beginner guide",
-    "advanced basics",
     "what to do first",
 ]
 
@@ -25,62 +24,51 @@ WRAPPERS = [
 ]
 
 CATEGORIES: dict[str, list[str]] = {
-    "minecraft": [
-        "Minecraft crystal PvP", "Minecraft End Crystals", "Minecraft obsidian",
-        "Minecraft totem of undying", "Minecraft ender pearls", "Minecraft netherite",
-        "Minecraft blast protection", "Minecraft redstone", "Minecraft pistons",
-        "Minecraft enchanting table", "Minecraft villagers", "Minecraft Ender Dragon",
-        "Minecraft Nether portals", "Minecraft elytra", "Minecraft shulker boxes",
-        "Minecraft golden apples", "Minecraft brewing", "Minecraft beacons",
-        "Minecraft wardens", "Minecraft ocean monuments", "Minecraft raids",
-        "Minecraft iron farms basics", "Minecraft villager trading", "Minecraft fortune",
-        "Minecraft silk touch", "Minecraft mending", "Minecraft boats",
-        "Minecraft water bucket clutch", "Minecraft scaffolding", "Minecraft hoppers",
-        "Minecraft comparators", "Minecraft observers", "Minecraft note blocks",
-        "Minecraft ancient debris", "Minecraft bastions", "Minecraft fortress blaze rods",
-        "Minecraft end cities", "Minecraft chorus fruit", "Minecraft respawn anchors",
-        "Minecraft beds in the Nether", "Minecraft shields", "Minecraft axes in PvP",
-        "Minecraft Java combat cooldown", "Minecraft offhand totems", "Minecraft crystal placement",
+    "crystal-pvp": [
+        "Minecraft crystal PvP", "Minecraft End Crystals", "Minecraft crystal placement",
+        "Minecraft obsidian crystal bases", "Minecraft crystal detonations",
+        "Minecraft totem of undying in crystal PvP", "Minecraft ender pearls in crystal PvP",
+        "Minecraft blast protection", "Minecraft crystal PvP hotbar", "Minecraft crystal PvP movement",
     ],
-    "space": [
-        "the Moon", "Mars", "Jupiter", "Saturn's rings", "Venus", "Mercury",
-        "Neptune", "Uranus", "Pluto", "the Sun", "black holes", "neutron stars",
-        "the Milky Way", "the Orion Nebula", "comets", "asteroids", "the ISS",
-        "Earth's magnetic field", "solar wind", "eclipses", "tides and the Moon",
-        "light years", "constellations", "the Kuiper Belt", "the Oort Cloud",
+    "pvp": [
+        "Minecraft Java combat cooldown", "Minecraft sword PvP", "Minecraft axe PvP",
+        "Minecraft shields", "Minecraft offhand totems", "Minecraft golden apples in PvP",
+        "Minecraft knockback", "Minecraft ender pearls", "Minecraft water bucket clutch",
     ],
-    "ocean": [
-        "coral reefs", "whales", "octopuses", "great white sharks", "sea turtles",
-        "hydrothermal vents", "the Mariana Trench", "tides", "waves", "plankton",
-        "kelp forests", "dolphins", "manta rays", "deep sea fish", "ocean currents",
+    "redstone": [
+        "Minecraft redstone", "Minecraft pistons", "Minecraft sticky pistons",
+        "Minecraft repeaters", "Minecraft comparators", "Minecraft observers",
+        "Minecraft hoppers", "Minecraft note blocks", "Minecraft target blocks",
     ],
-    "animals": [
-        "honeybees", "elephants", "penguins", "owls", "wolves", "octopuses",
-        "cheetahs", "giraffes", "crocodiles", "frogs", "bats", "ants",
-        "migrating birds", "hummingbirds", "polar bears", "kangaroos",
+    "nether": [
+        "Minecraft Nether portals", "Minecraft ancient debris", "Minecraft netherite",
+        "Minecraft bastions", "Minecraft fortress blaze rods", "Minecraft ghasts",
+        "Minecraft respawn anchors", "Minecraft beds in the Nether", "Minecraft soul sand",
     ],
-    "volcanoes": [
-        "how volcanoes erupt", "lava vs magma", "shield volcanoes", "stratovolcanoes",
-        "volcanic ash", "calderas", "hot spots", "Mount Vesuvius", "Mauna Loa",
-        "geyser basics", "volcanic lightning",
+    "end": [
+        "Minecraft Ender Dragon", "Minecraft End Crystals", "Minecraft end cities",
+        "Minecraft elytra", "Minecraft shulker boxes", "Minecraft chorus fruit",
+        "Minecraft eyes of ender", "Minecraft End gateways", "Minecraft outer End islands",
     ],
-    "engineering": [
-        "suspension bridges", "skyscraper foundations", "dams", "tunnels",
-        "high speed trains", "wind turbines", "solar panels", "gears",
-        "levers", "pulleys", "arches", "cantilevers",
+    "enchanting": [
+        "Minecraft enchanting table", "Minecraft mending", "Minecraft silk touch",
+        "Minecraft fortune", "Minecraft blast protection", "Minecraft sharpness",
+        "Minecraft unbreaking", "Minecraft enchanted books", "Minecraft anvils",
     ],
-    "weather": [
-        "lightning", "thunder", "hurricanes", "tornadoes", "rainbows",
-        "snowflakes", "hail", "fog", "clouds", "the water cycle",
+    "mobs": [
+        "Minecraft creepers", "Minecraft endermen", "Minecraft wardens",
+        "Minecraft villagers", "Minecraft iron golems", "Minecraft raids",
+        "Minecraft evokers", "Minecraft shulkers", "Minecraft blazes",
     ],
-    "inventions": [
-        "the printing press", "the compass", "the steam engine", "the airplane",
-        "the light bulb", "radio", "GPS", "the World Wide Web", "vaccines history basics",
-        "refrigeration", "paper", "the wheel",
+    "items": [
+        "Minecraft totem of undying", "Minecraft golden apples", "Minecraft ender pearls",
+        "Minecraft shulker boxes", "Minecraft elytra", "Minecraft netherite",
+        "Minecraft shields", "Minecraft fireworks", "Minecraft water buckets",
     ],
-    "human-body": [
-        "bones", "muscles", "the heart", "the lungs", "the brain",
-        "red blood cells", "skin", "eyes", "ears", "digestion",
+    "building": [
+        "Minecraft obsidian", "Minecraft scaffolding", "Minecraft deepslate",
+        "Minecraft copper", "Minecraft amethyst", "Minecraft dripstone",
+        "Minecraft lodestones", "Minecraft beacons", "Minecraft conduits",
     ],
 }
 
@@ -93,21 +81,6 @@ def lineup_size() -> int:
         total += len(subjects) * len(ANGLES) * len(WRAPPERS)
     return total
 
-def iter_lineup():
-    for category, subjects in CATEGORIES.items():
-        for subject in subjects:
-            for angle in ANGLES:
-                for wrapper in WRAPPERS:
-                    yield category, wrapper.format(subject=subject, angle=angle)
-
-def topic_at(index: int) -> tuple[str, str]:
-    size = lineup_size()
-    index = index % size
-    for i, item in enumerate(iter_lineup()):
-        if i == index:
-            return item
-    return "minecraft", "Minecraft crystal PvP tips"
-
 def pick_topic(mode: str, category: Optional[str] = None, prompt: Optional[str] = None) -> str:
     mode = (mode or "prompt").strip().lower()
     prompt = (prompt or "").strip()
@@ -116,14 +89,14 @@ def pick_topic(mode: str, category: Optional[str] = None, prompt: Optional[str] 
     if mode == "random":
         if category and category in CATEGORIES:
             return _random_in_category(category)
-        _cat, topic = topic_at(random.randrange(lineup_size()))
-        return topic
+        cat = random.choice(category_names())
+        return _random_in_category(cat)
     if mode == "category":
-        cat = category if category in CATEGORIES else "minecraft"
+        cat = category if category in CATEGORIES else "crystal-pvp"
         return _random_in_category(cat)
     if prompt:
         return prompt
-    return _random_in_category("minecraft")
+    return _random_in_category("crystal-pvp")
 
 def _random_in_category(category: str) -> str:
     subjects = CATEGORIES[category]

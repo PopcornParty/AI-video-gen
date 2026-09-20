@@ -13,22 +13,22 @@ on:
           - category
           - random
       category:
-        description: "Used when mode is category or random"
+        description: "Minecraft category (used when mode is category or random)"
         required: false
         type: choice
-        default: minecraft
+        default: crystal-pvp
         options:
-          - minecraft
-          - space
-          - ocean
-          - animals
-          - volcanoes
-          - engineering
-          - weather
-          - inventions
-          - human-body
+          - crystal-pvp
+          - pvp
+          - redstone
+          - nether
+          - end
+          - enchanting
+          - mobs
+          - items
+          - building
       topic:
-        description: "Your prompt (used when mode is prompt)"
+        description: "Your Minecraft prompt (used when mode is prompt)"
         required: false
         default: "Minecraft crystal PvP tips"
       duration:
