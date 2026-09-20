@@ -3,10 +3,34 @@ name: Generate Short
 on:
   workflow_dispatch:
     inputs:
-      topic:
-        description: "Topic for the YouTube Short"
+      mode:
+        description: "How to pick the topic"
         required: true
-        default: "Amazing space facts"
+        type: choice
+        default: prompt
+        options:
+          - prompt
+          - category
+          - random
+      category:
+        description: "Used when mode is category or random"
+        required: false
+        type: choice
+        default: minecraft
+        options:
+          - minecraft
+          - space
+          - ocean
+          - animals
+          - volcanoes
+          - engineering
+          - weather
+          - inventions
+          - human-body
+      topic:
+        description: "Your prompt (used when mode is prompt)"
+        required: false
+        default: "Minecraft crystal PvP tips"
       duration:
         description: "Target length in seconds (22-45 works best)"
         required: false
@@ -38,7 +62,8 @@ jobs:
           pip install -r requirements.txt
 
       - name: Generate Short (no API keys)
-        run: python main.py --topic "${{ github.event.inputs.topic }}" --duration ${{ github.event.inputs.duration }}
+        run: |
+          python main.py --mode "${{ github.event.inputs.mode }}" --category "${{ github.event.inputs.category }}" --topic "${{ github.event.inputs.topic }}" --duration ${{ github.event.inputs.duration }}
 
       - name: Prepare download folder
         run: |
@@ -58,13 +83,11 @@ jobs:
           fi
           cp "$RUNDIR/tags.txt" youtube-upload/youtube-tags.txt || true
           {
-            echo "Topic: ${{ github.event.inputs.topic }}"
-            echo "On iPhone: tap the download, then tap video.mp4 to play it."
-            echo "youtube-title.txt = YouTube title"
-            echo "youtube-description.txt = YouTube description"
-            echo "youtube-hashtags.txt = hashtags"
+            echo "Mode: ${{ github.event.inputs.mode }}"
+            echo "Category: ${{ github.event.inputs.category }}"
+            echo "Prompt: ${{ github.event.inputs.topic }}"
+            echo "On iPhone: unzip if needed, then tap video.mp4."
           } > youtube-upload/README.txt
-          ls -lh youtube-upload
           echo "----- TITLE -----"
           cat youtube-upload/youtube-title.txt
 

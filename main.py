@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from src.captions import group_captions, write_srt
+from src.catalog import category_names, lineup_size, pick_topic
 from src.config_loader import load_config
 from src.fact_checker import sources_text
 from src.metadata import generate_metadata
@@ -28,7 +29,9 @@ TOTAL_STEPS = 8
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate YouTube Shorts from a topic.")
-    parser.add_argument("--topic", "-t")
+    parser.add_argument("--topic", "-t", default="", help="Used when mode=prompt")
+    parser.add_argument("--mode", choices=["prompt", "category", "random"], default="prompt")
+    parser.add_argument("--category", default="minecraft", help="minecraft, space, ocean, animals, ...")
     parser.add_argument("--topics-file", default=str(ROOT / "topics.txt"))
     parser.add_argument("--config", default=str(ROOT / "config.json"))
     parser.add_argument("--duration", type=int)
@@ -37,6 +40,11 @@ def parse_args():
     return parser.parse_args()
 
 def load_topics(args):
+    if args.mode in {"category", "random"} or (args.mode == "prompt" and args.topic.strip()):
+        topic = pick_topic(args.mode, args.category, args.topic)
+        info(f"Catalog size: {lineup_size():,} possible topic lines")
+        info(f"Picked topic: {topic}")
+        return [topic]
     if args.topic:
         return [args.topic.strip()]
     path = Path(args.topics_file)
@@ -46,7 +54,7 @@ def load_topics(args):
             return lines
         if lines:
             return [lines[0]]
-    return []
+    return [pick_topic("random", "minecraft", "")]
 
 def generate_one(topic, cfg):
     video_cfg = cfg["video"]
@@ -108,6 +116,9 @@ def main():
         cfg["video"]["target_duration"] = max(15, min(59, args.duration))
     if args.no_music:
         cfg["music"]["enabled"] = False
+    if args.category and args.category not in category_names() and args.mode != "prompt":
+        warn(f"Unknown category '{args.category}', using minecraft")
+        args.category = "minecraft"
     topics = load_topics(args)
     if not topics:
         warn("No topic provided.")
