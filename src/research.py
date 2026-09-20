@@ -3,14 +3,14 @@ from __future__ import annotations
 import re
 from typing import Any
 from urllib.parse import quote
-from .minecraft_kb import all_minecraft_facts, facts_for_topic, minecraft_topic, minecraft_visuals, topic_keys
-from .utils import http_get, info, unique_keep_order, warn
+from .minecraft_kb import facts_for_topic, minecraft_topic, minecraft_visuals, topic_keys
+from .utils import http_get, info, unique_keep_order
 
 WIKI_API = "https://en.wikipedia.org/w/api.php"
 _FILLER = {
     "amazing", "insane", "wild", "crazy", "facts", "fact", "most", "about",
     "the", "that", "tips", "tip", "guide", "how", "why", "what", "for", "and",
-    "with", "from", "make", "video", "short",
+    "with", "from", "make", "video", "short", "tell", "everything",
 }
 _HISTORY = (
     "developed by", "published by", "created by", "founded by", "released in",
@@ -44,19 +44,15 @@ def visual_lookups(topic: str) -> list[str]:
 def research_topic(topic: str, language: str = "en") -> dict[str, Any]:
     info(f"Researching locked topic: {topic}")
     query = clean_topic_query(topic)
-    facts = []
-    sources = []
     keywords = visual_lookups(topic)
     if minecraft_topic(topic):
-        info(f"Loaded built-in Minecraft fact bank ({len(all_minecraft_facts())} facts)")
-        facts = facts_for_topic(topic, limit=20)
-        sources.append({"title": "Built-in Minecraft fact bank", "url": "local:minecraft_kb", "type": "local"})
-        if not facts:
-            facts = [f for f in all_minecraft_facts() if "end crystal" in f.lower()][:12]
+        facts = facts_for_topic(topic, limit=12)
+        sources = [{"title": "Built-in Minecraft fact bank", "url": "local:minecraft_kb", "type": "local"}]
+        info(f"Using {len(facts)} on-topic Minecraft facts")
     else:
         facts, sources, keywords = _wiki_research(topic, query, keywords)
     facts = [f for f in facts if not _is_history_sentence(f)]
-    facts = unique_keep_order(facts)[:18]
+    facts = unique_keep_order(facts)[:12]
     if not facts:
         facts = [f"This video is only about {query}."]
     return {
