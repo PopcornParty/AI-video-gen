@@ -21,7 +21,7 @@ from src.music import get_music_track
 from src.research import research_topic
 from src.scene_generator import build_timed_scenes
 from src.script_generator import generate_script
-from src.simulation import render_simulation, simulation_types
+from src.simulation import TYPES, render_simulation, simulation_types
 from src.utils import ensure_dir, info, save_json, save_text, slugify, step, warn
 from src.video_editor import render_short
 from src.visual_search import find_visuals_for_scenes
@@ -34,7 +34,7 @@ def parse_args():
     parser.add_argument("--topic", "-t", default="")
     parser.add_argument("--mode", choices=["prompt", "category", "random", "simulation"], default="prompt")
     parser.add_argument("--category", default="items")
-    parser.add_argument("--simulation-type", default="crystal", help="crystal, redstone, gravity, portal, life, fire, rain")
+    parser.add_argument("--simulation-type", default="grow")
     parser.add_argument("--topics-file", default=str(ROOT / "topics.txt"))
     parser.add_argument("--config", default=str(ROOT / "config.json"))
     parser.add_argument("--duration", type=int)
@@ -57,7 +57,7 @@ def generate_simulation(args, cfg):
     video = render_simulation(args.simulation_type, duration, cfg, out_root, work_dir)
     print("\nVIDEO COMPLETE\n")
     print(f"Video:\n{video}")
-    print("Silent simulation. No voice. No captions.")
+    print("Simulation finished on its own ending. No voice. No captions.")
     return video
 
 def generate_one(topic, cfg):
@@ -78,14 +78,12 @@ def generate_one(topic, cfg):
     script = generate_script(research, target_duration=int(target), language=cfg.get("language", "en"))
     save_json(run_dir / "script.json", script)
     save_text(run_dir / "script.txt", script.get("full_narration", ""))
-    info(f"Narration words: {len(script.get('full_narration', '').split())}")
     step(3, TOTAL_STEPS, "Generating voice...")
     voice = generate_voice(script["full_narration"], cache_dir=cache_dir, voice_cfg=cfg["voice"], work_dir=work_dir)
     audio_path = pad_audio_to(Path(voice["audio_path"]), work_dir / "narration_padded.m4a", target)
     shutil.copy2(audio_path, run_dir / "narration.mp3")
     save_json(run_dir / "words.json", voice.get("words") or [])
     audio_duration = float(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(audio_path)], text=True).strip())
-    info(f"Voice+pad length: {audio_duration:.1f}s")
     step(4, TOTAL_STEPS, "Finding visuals...")
     scenes = find_visuals_for_scenes(script.get("scenes") or [], topic, cache_dir, cfg.get("visuals") or {})
     step(5, TOTAL_STEPS, "Building scenes...")

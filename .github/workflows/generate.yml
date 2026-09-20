@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "How to pick the topic. Use simulation for a silent visual."
+        description: "prompt / category / random / simulation"
         required: true
         type: choice
         default: prompt
@@ -30,7 +30,7 @@ on:
           - building
           - simulation
       simulation_type:
-        description: "Simulation type (only for mode/category = simulation)"
+        description: "grow=ball gets bigger | shrink=circle shrinks | squeeze=both | swarm=many balls | spawn=bounces add balls | box/triangle/hexagon=other shapes | rings=escape rotating gaps | race=two colors | gravity=falling bowl | split=ball splits | orbit=rim trails | paddle=spinning gap | random=surprise"
         required: false
         type: choice
         default: grow
@@ -42,15 +42,20 @@ on:
           - spawn
           - box
           - triangle
+          - hexagon
           - rings
           - race
           - gravity
+          - split
+          - orbit
+          - paddle
+          - random
       topic:
-        description: "Your Minecraft prompt (used when mode is prompt)"
+        description: "Your Minecraft prompt (mode=prompt)"
         required: false
         default: "Minecraft totem of undying"
       duration:
-        description: "Video length in seconds"
+        description: "Talking-video length. Simulations ignore this and end when they finish."
         required: false
         default: "34"
 
@@ -63,26 +68,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install system tools
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-lato fonts-liberation
-
       - name: Install Python packages
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
       - name: Generate Short (no API keys)
         run: |
           python main.py --mode "${{ github.event.inputs.mode }}" --category "${{ github.event.inputs.category }}" --simulation-type "${{ github.event.inputs.simulation_type }}" --topic "${{ github.event.inputs.topic }}" --duration ${{ github.event.inputs.duration }}
-
       - name: Prepare download folder
         run: |
           set -e
@@ -93,24 +93,13 @@ jobs:
           cp "$VIDEO" youtube-upload/video.mp4
           cp "$RUNDIR/title.txt" youtube-upload/youtube-title.txt
           cp "$RUNDIR/description.txt" youtube-upload/youtube-description.txt
-          if [ -f "$RUNDIR/hashtags.txt" ]; then
-            cp "$RUNDIR/hashtags.txt" youtube-upload/youtube-hashtags.txt
-          else
-            echo "#Shorts #satisfying #simulation" > youtube-upload/youtube-hashtags.txt
-          fi
-          {
-            echo "Mode: ${{ github.event.inputs.mode }}"
-            echo "Simulation: ${{ github.event.inputs.simulation_type }}"
-            echo "Duration: ${{ github.event.inputs.duration }}"
-          } > youtube-upload/README.txt
-
+          cp "$RUNDIR/hashtags.txt" youtube-upload/youtube-hashtags.txt || true
       - name: Upload Short files
         uses: actions/upload-artifact@v4
         with:
           name: youtube-short
           path: youtube-upload/*
           if-no-files-found: error
-
       - name: Upload video only
         uses: actions/upload-artifact@v4
         with:
