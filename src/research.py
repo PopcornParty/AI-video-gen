@@ -1,4 +1,4 @@
-"""Research a topic using Wikipedia. No API key required."""
+"""Research a topic using Wikipedia. Stay on the typed topic."""
 from __future__ import annotations
 import re
 from typing import Any
@@ -11,26 +11,27 @@ _FILLER = {
     "the", "that", "sound", "fake", "people", "never", "hear", "quick",
     "best", "top", "cool", "weird", "explain", "how", "why", "what", "tips",
     "tip", "guide", "tricks", "tutorial", "for", "and", "with", "from",
+    "make", "video", "short",
 }
 _HISTORY = (
     "developed by", "published by", "created by", "founded by", "released in",
-    "released on", "originally", "studio", "headquarters", "born in",
+    "released on", "originally released", "headquarters", "born in",
 )
-_BROAD = {
-    "game", "games", "video", "world", "history", "company", "minecraft",
-    "fortnite", "roblox", "space", "science", "music", "sport", "sports",
-}
+_GENERIC = {"game", "games", "world", "history", "company", "science", "music", "sport", "sports", "video"}
 
 def topic_tokens(topic: str) -> list[str]:
     words = re.findall(r"[A-Za-z][A-Za-z0-9+\-]{2,}", topic)
     return [w for w in words if w.lower() not in _FILLER]
 
 def specific_tokens(topic: str) -> list[str]:
-    return [t for t in topic_tokens(topic) if t.lower() not in _BROAD]
+    return [t for t in topic_tokens(topic) if t.lower() not in _GENERIC]
 
 def clean_topic_query(topic: str) -> str:
     kept = topic_tokens(topic)
     return " ".join(kept) or topic.strip() or topic
+
+def focus_phrase(topic: str) -> str:
+    return clean_topic_query(topic)
 
 def is_tips_topic(topic: str) -> bool:
     low = topic.lower()
@@ -38,40 +39,31 @@ def is_tips_topic(topic: str) -> bool:
 
 def related_lookups(topic: str) -> list[str]:
     query = clean_topic_query(topic)
-    tokens = topic_tokens(topic)
     specific = specific_tokens(topic)
-    extras = [topic, query]
+    extras = [f"\"{query}\"", query, topic]
     if specific:
         extras.append(" ".join(specific))
-        extras.extend(specific)
         if len(specific) >= 2:
             extras.append(" ".join(specific[:2]))
-            extras.append(" ".join(specific[-2:]))
-    if tokens and specific:
-        extras.append(f"{tokens[0]} {' '.join(specific[:2])}")
     return unique_keep_order([e for e in extras if e and e.strip()])
 
 def visual_lookups(topic: str) -> list[str]:
     query = clean_topic_query(topic)
-    tokens = topic_tokens(topic)
     specific = specific_tokens(topic)
     extras = [query]
     if specific:
         extras.append(" ".join(specific))
-        for word in specific:
-            extras.append(word)
-            if tokens:
-                extras.append(f"{tokens[0]} {word}")
-    extras.append(f"{query} photograph")
-    extras.append(f"{query} screenshot")
-    extras.append(f"{specific[0]} photograph" if specific else f"{query} image")
+        if len(specific) >= 2:
+            extras.append(f"{specific[0]} {specific[1]}")
+    extras.append(f"{query} photo")
     return unique_keep_order([e for e in extras if e and e.strip()])
 
 def research_topic(topic: str, language: str = "en") -> dict[str, Any]:
-    info(f"Researching: {topic}")
+    info(f"Researching locked topic: {topic}")
     query = clean_topic_query(topic)
     tokens = [t.lower() for t in topic_tokens(topic)]
     specific = [t.lower() for t in specific_tokens(topic)]
+    must = specific or tokens
     pages = []
     seen = set()
     for q in related_lookups(topic):
@@ -81,14 +73,16 @@ def research_topic(topic: str, language: str = "en") -> dict[str, Any]:
                 continue
             seen.add(title.lower())
             pages.append(page)
-    pages.sort(key=lambda p: _title_score(p.get("title") or "", p.get("snippet") or "", tokens, specific), reverse=True)
+    pages.sort(key=lambda p: _title_score(p.get("title") or "", p.get("snippet") or "", tokens, must), reverse=True)
     facts = []
     sources = []
     summary = ""
     keywords = visual_lookups(topic)
-    for page in pages[:10]:
+    for page in pages[:8]:
         title = page.get("title") or ""
-        if not title or _off_topic_title(title, topic, specific):
+        if not title or _off_topic_title(title, topic, must):
+            continue
+        if _title_score(title, page.get("snippet") or "", tokens, must) <= 0:
             continue
         extract, url = _wiki_extract(title)
         if not extract:
@@ -100,12 +94,12 @@ def research_topic(topic: str, language: str = "en") -> dict[str, Any]:
         for sentence in _fact_sentences(extract):
             if _is_history_sentence(sentence):
                 continue
-            if _sentence_matches_topic(sentence, tokens, specific):
-                facts.append(sentence)
-    facts = unique_keep_order(facts)[:18]
-    if not facts:
-        warn("Few on-topic encyclopedia sentences; staying on the typed subject")
-        facts = _subject_points(topic, query, specific)
+            if _sentence_matches_topic(sentence, must):
+                facts.append(_pin_sentence(sentence, query))
+    facts = unique_keep_order(facts)[:12]
+    if len(facts) < 3:
+        warn("Not enough on-topic encyclopedia lines; writing locked talking points")
+        facts = unique_keep_order(facts + _subject_points(topic, query))
     return {
         "topic": topic,
         "query": query,
@@ -118,44 +112,42 @@ def research_topic(topic: str, language: str = "en") -> dict[str, Any]:
         "visual_lookups": unique_keep_order(keywords)[:20],
     }
 
-def _subject_points(topic, query, specific):
-    focus = " ".join(specific) if specific else query
-    if is_tips_topic(topic):
-        return [
-            f"This is about {focus}, not the origin story of the bigger topic.",
-            f"The useful part of {focus} is how it is used in practice.",
-            f"Stay on {focus}: what it is, how it works, and what to do with it.",
-            f"Ignore company history and talk about {focus} itself.",
-        ]
+def _pin_sentence(sentence, query):
+    if query.lower() in sentence.lower():
+        return sentence
+    return f"On {query}: {sentence}"
+
+def _subject_points(topic, query):
     return [
-        f"This Short is about {focus}, not the broader category around it.",
-        f"The details that matter are the ones that explain {focus}.",
-        f"Keep the focus on {focus} instead of a generic overview.",
+        f"This video is only about {query}.",
+        f"Every point here stays on {query}.",
+        f"If a detail is not {query}, it gets cut.",
+        f"The useful part is how {query} works in practice.",
+        f"Watch for {query}, not a wider subject around it.",
     ]
 
-def _title_score(title, snippet, tokens, specific):
+def _title_score(title, snippet, tokens, must):
     blob = f"{title} {re.sub('<[^>]+>', ' ', snippet)}".lower()
-    score = 0
     title_l = title.lower()
-    if specific and title_l in {t for t in tokens if t not in specific}:
-        score -= 6
-    for t in specific:
+    score = 0
+    if must and not any(t in blob for t in must):
+        return -10
+    for t in must:
         if t in title_l:
-            score += 6
+            score += 8
         elif t in blob:
-            score += 2
-    for t in tokens:
-        if t in title_l:
-            score += 1
+            score += 3
+    if tokens and title_l == tokens[0]:
+        score -= 8
     return score
 
-def _sentence_matches_topic(sentence, tokens, specific):
+def _sentence_matches_topic(sentence, must):
     low = sentence.lower()
     if _is_history_sentence(sentence):
         return False
-    if specific:
-        return any(t in low for t in specific)
-    return any(t in low for t in tokens) if tokens else True
+    if not must:
+        return True
+    return any(t in low for t in must)
 
 def _is_history_sentence(sentence):
     low = sentence.lower()
@@ -171,7 +163,19 @@ def _wiki_search(topic, limit=5):
         return []
 
 def _wiki_extract(title):
-    resp = http_get(WIKI_API, params={"action": "query", "prop": "extracts|info", "explaintext": "1", "exsentences": "18", "redirects": "1", "inprop": "url", "titles": title, "format": "json", "utf8": "1"})
+    resp = http_get(
+        WIKI_API,
+        params={
+            "action": "query",
+            "prop": "extracts|info",
+            "explaintext": "1",
+            "redirects": "1",
+            "inprop": "url",
+            "titles": title,
+            "format": "json",
+            "utf8": "1",
+        },
+    )
     if resp is None:
         return "", ""
     try:
@@ -179,7 +183,7 @@ def _wiki_extract(title):
         for page in pages.values():
             extract = (page.get("extract") or "").strip()
             url = page.get("fullurl") or f"https://en.wikipedia.org/wiki/{quote(title.replace(' ', '_'))}"
-            return extract, url
+            return extract[:4000], url
     except ValueError:
         return "", ""
     return "", ""
@@ -190,21 +194,22 @@ def _fact_sentences(extract):
     for part in re.split(r"(?<=[.!?])\s+", text):
         sentence = part.strip()
         low = sentence.lower()
-        if len(sentence) < 40 or len(sentence) > 240:
+        if len(sentence) < 35 or len(sentence) > 220:
             continue
         if any(p in low for p in ("this article", "coordinates", "see also", "references", "citation needed")):
             continue
         out.append(sentence)
-    return out[:12]
+    return out[:20]
 
-def _off_topic_title(title, topic, specific):
+def _off_topic_title(title, topic, must):
     low = title.lower()
     topic_l = topic.lower()
     if "disambiguation" in low:
         return True
     tokens = [t.lower() for t in topic_tokens(topic)]
-    broad_only = [t for t in tokens if t not in specific]
-    if specific and low in broad_only:
+    if must and tokens and low == tokens[0] and tokens[0] not in must:
+        return True
+    if must and not any(t in low for t in must) and low not in topic_l:
         return True
     blocked = ["film", "movie", "album", "song", "novel", "episode", "tv series", "klown", "adult", "kernel space", "user space"]
     return any(b in low for b in blocked) and not any(b in topic_l for b in blocked)

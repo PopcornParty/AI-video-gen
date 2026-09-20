@@ -1,10 +1,10 @@
-"""Write a Shorts script: 3s hook, 10s interest, then facts."""
+"""Write a Shorts script locked to the typed topic."""
 from __future__ import annotations
 import re
 from .research import clean_topic_query, is_tips_topic, specific_tokens, topic_tokens, visual_lookups
 from .utils import info, unique_keep_order
 
-HOOK_WORDS = 8
+HOOK_WORDS = 10
 INTEREST_WORDS = 24
 
 _STOP = {
@@ -12,82 +12,74 @@ _STOP = {
     "short", "facts", "true", "real", "want", "like", "more", "next", "stay",
     "wait", "stop", "swipe", "wrong", "think", "works", "coming", "loop",
     "missed", "first", "line", "reason", "actually", "what", "does", "don't",
+    "video", "only", "every", "point", "here", "gets",
 }
 
 def generate_script(research, target_duration=32, language="en"):
-    facts = research.get("facts") or []
     topic = research.get("topic") or "this topic"
-    info("Script: 3s hook, 10s interest, then facts")
-    script = _structured_script(topic, facts, target_duration)
+    focus = clean_topic_query(topic)
+    info(f"Script locked to: {focus}")
+    facts = [_keep_on_topic(f, focus) for f in (research.get("facts") or [])]
+    facts = [f for f in facts if _mentions_focus(f, focus, topic)]
+    script = _structured_script(topic, focus, facts, target_duration)
     script["full_narration"] = _compose_narration(script)
     script["scenes"] = _plan_scenes(script, research)
     script["sources"] = research.get("sources") or []
     return script
 
+def _mentions_focus(text, focus, topic):
+    low = text.lower()
+    needles = [focus.lower()] + [t.lower() for t in specific_tokens(topic)]
+    needles = [n for n in needles if n]
+    return any(n in low for n in needles)
+
+def _keep_on_topic(sentence, focus):
+    s = _tighten(sentence)
+    if focus.lower() in s.lower():
+        return s
+    return f"On {focus}: {s}"
+
 def _compose_narration(script):
     parts = [script.get("hook", ""), script.get("interest", "")] + list(script.get("body") or []) + [script.get("ending", "")]
     return re.sub(r"\s+", " ", " ".join(p.strip() for p in parts if p and p.strip())).strip()
 
-def _focus_label(topic):
-    specific = specific_tokens(topic)
-    return " ".join(specific) if specific else clean_topic_query(topic)
-
-def _structured_script(topic, facts, target_duration):
-    label = _focus_label(topic)
-    cleaned = unique_keep_order([_tighten(f) for f in facts if len(f) > 30])
-    hook, hook_card = _make_hook(topic, label, cleaned)
-    interest = _make_interest(topic, label, cleaned)
+def _structured_script(topic, focus, facts, target_duration):
+    cleaned = unique_keep_order([_tighten(f) for f in facts if len(f) > 20])
+    hook = _limit_words(f"This is {focus}. Not something else.", HOOK_WORDS)
+    hook_card = _limit_words(focus, 6).rstrip(".")
+    if is_tips_topic(topic):
+        hook = _limit_words(f"{focus}. That's the only topic.", HOOK_WORDS)
+    interest = _tighten(_limit_words(
+        f"Stay if you want {focus}. Every line after this is {focus}.",
+        INTEREST_WORDS,
+    ))
     fact_budget = max(28, int(min(target_duration, 40) * 2.2) - len(hook.split()) - len(interest.split()) - 12)
     body = []
     used = 0
     for fact in cleaned:
         if fact.lower() in hook.lower() or fact.lower() in interest.lower():
             continue
-        if any(w in fact.lower() for w in ("developed by", "published by", "founded by", "released in", "headquarters")):
-            continue
+        fact = _keep_on_topic(fact, focus)
         words = len(fact.split())
         if used + words > fact_budget:
             break
         body.append(fact)
         used += words
     if not body:
-        body = [f"Here is the part that actually matters about {label}."]
-        if cleaned:
-            body.append(cleaned[0])
-    ending = _make_ending(label, hook)
+        body = [
+            f"On {focus}: this Short does not switch subjects.",
+            f"On {focus}: the details stay on that one request.",
+        ]
+    ending = f"Follow for more {focus}."
     return {
         "hook": hook,
         "hook_card": hook_card,
         "interest": interest,
         "body": body,
         "ending": ending,
-        "title_seed": label,
-        "provider": "hook-interest-facts",
+        "title_seed": focus,
+        "provider": "topic-lock",
     }
-
-def _make_hook(topic, label, facts):
-    short_label = label if len(label.split()) <= 4 else " ".join(label.split()[:4])
-    formulas = [
-        (f"Wait. {short_label} is not what you think.", f"Wait. {short_label}."),
-        (f"Stop. This is the real {short_label} part.", f"The real {short_label}"),
-        (f"Why does {short_label} actually work like this?", f"Why {short_label}?"),
-        (f"Don't swipe. {short_label} gets weird next.", f"Don't swipe."),
-    ]
-    if is_tips_topic(topic):
-        formulas.insert(0, (f"You're doing {short_label} wrong.", f"Wrong {short_label}?"))
-    idx = abs(hash(topic.lower())) % len(formulas)
-    hook, card = formulas[idx]
-    return _limit_words(hook, HOOK_WORDS), _limit_words(card, 5).rstrip(".")
-
-def _make_interest(topic, label, facts):
-    tease = ""
-    if facts:
-        tease = " ".join(facts[0].split()[:10]).rstrip(",;:")
-    line = f"Stay. The reason {label} works is coming. {tease}."
-    return _tighten(_limit_words(line, INTEREST_WORDS))
-
-def _make_ending(label, hook):
-    return f"Follow for more {label}. Loop it if you missed the first line."
 
 def _limit_words(text, n):
     words = re.findall(r"\S+", text)
@@ -119,11 +111,12 @@ def _plan_scenes(script, research):
     units.append(("ending", script.get("ending", "")))
     units = [(k, t.strip()) for k, t in units if t and t.strip()]
     topic = research.get("topic") or ""
-    lookups = research.get("visual_lookups") or visual_lookups(topic)
+    focus = clean_topic_query(topic)
+    lookups = [focus] + list(research.get("visual_lookups") or visual_lookups(topic))
     used_queries = set()
     scenes = []
     for i, (kind, text) in enumerate(units):
-        variants = _query_variants(kind, text, topic, lookups, i)
+        variants = _query_variants(kind, text, topic, lookups)
         query = variants[0]
         for item in variants:
             if item.lower() not in used_queries:
@@ -142,22 +135,13 @@ def _plan_scenes(script, research):
         })
     return scenes
 
-def _query_variants(kind, text, topic, lookups, index):
-    subject = _focus_label(topic)
+def _query_variants(kind, text, topic, lookups):
+    subject = clean_topic_query(topic)
     nouns = _content_words(text)
-    variants = []
-    if kind == "hook":
-        variants.append(subject)
-        if lookups:
-            variants.append(lookups[0])
+    variants = [subject]
     if nouns:
-        variants.append(f"{subject} {' '.join(nouns[:5])}")
-        variants.append(" ".join(nouns[:6]))
-        variants.append(f"{subject} {nouns[0]}")
-    if lookups:
-        variants.append(lookups[index % len(lookups)])
-        variants.extend(lookups[:6])
-    variants.append(subject)
+        variants.append(f"{subject} {' '.join(nouns[:4])}")
+    variants.extend(lookups[:8])
     cleaned = []
     for query in variants:
         query = re.sub(r"\s+", " ", query).strip()[:80]
