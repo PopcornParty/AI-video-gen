@@ -1,4 +1,4 @@
-"""Silent satisfying physics Shorts. No voice. No captions."""
+"""Silent satisfying physics simulations. No voice, no captions."""
 from __future__ import annotations
 import math
 import random
@@ -6,25 +6,50 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
-import numpy as np
 from PIL import Image, ImageDraw
 from .utils import ensure_dir, info, save_text, warn
 
 TYPES = {
-    "grow-bounce": "Ball grows every time it hits the circle",
-    "shrink-arena": "Circle shrinks every bounce",
-    "grow-and-shrink": "Ball grows and the circle closes in",
-    "split": "Every bounce splits the ball until the circle is full",
-    "color-race": "Two colors bounce and grow — which fills first",
-    "spinning-square": "Ball trapped in a spinning square",
-    "spinning-hex": "Ball trapped in a spinning hexagon",
-    "rings": "Ball escapes rotating rings through gaps",
-    "collide-spawn": "Each collision spawns another ball",
-    "plinko": "Balls fall through pegs",
+    "grow": "Ball grows on every bounce",
+    "shrink": "Circle shrinks on every bounce",
+    "squeeze": "Ball grows and the circle shrinks",
+    "swarm": "Lots of balls inside one circle",
+    "spawn": "A bounce can add another ball",
+    "box": "Ball grows inside a square",
+    "triangle": "Ball grows inside a triangle",
+    "rings": "Ball tries to escape rotating rings",
+    "race": "Two balls, who fills the circle",
+    "gravity": "Balls fall and bounce in a bowl",
 }
+
+BG = (8, 8, 12)
+INK = (235, 235, 245)
 
 def simulation_types() -> list[str]:
     return list(TYPES.keys())
+
+def render_simulation(sim_type: str, duration: float, cfg: dict, out_root: Path, work_dir: Path) -> Path:
+    sim_type = (sim_type or "grow").lower().strip()
+    if sim_type not in TYPES:
+        sim_type = "grow"
+    duration = max(8.0, min(58.0, float(duration or 34)))
+    W = 540
+    H = 960
+    fps = 30
+    frames = int(duration * fps)
+    ensure_dir(work_dir)
+    ensure_dir(out_root)
+    raw = work_dir / "simulation.mp4"
+    info(f"Rendering {duration:.0f}s silent '{sim_type}' physics sim ({frames} frames)")
+    _encode(sim_type, frames, fps, W, H, raw)
+    final = out_root / "video.mp4"
+    out_w = int(cfg["video"]["width"])
+    out_h = int(cfg["video"]["height"])
+    _scale_silent(raw, duration, out_w, out_h, final)
+    _write_meta(sim_type, duration, out_root)
+    if not final.exists() or final.stat().st_size < 10000:
+        raise RuntimeError("Simulation file was not created")
+    return final
 
 @dataclass
 class Ball:
@@ -36,307 +61,322 @@ class Ball:
     color: tuple
     trail: list = field(default_factory=list)
 
-def render_simulation(sim_type: str, duration: float, cfg: dict, out_root: Path, work_dir: Path) -> Path:
-    sim_type = (sim_type or "grow-bounce").lower().strip()
-    if sim_type not in TYPES:
-        sim_type = "grow-bounce"
-    duration = max(10.0, min(58.0, float(duration or 34)))
-    W = 540
-    H = 960
-    fps = 30
-    ensure_dir(work_dir)
-    ensure_dir(out_root)
-    raw = work_dir / "simulation.mp4"
-    info(f"Rendering {duration:.0f}s silent {sim_type} physics sim")
-    if not _render_frames(sim_type, duration, W, H, fps, raw):
-        raise RuntimeError("Simulation render failed")
-    final = out_root / "video.mp4"
-    _scale_and_silence(raw, duration, int(cfg["video"]["width"]), int(cfg["video"]["height"]), final)
-    _write_meta(sim_type, duration, out_root)
-    if not final.exists() or final.stat().st_size < 10000:
-        raise RuntimeError("Simulation file was not created")
-    return final
-
-def _render_frames(sim_type, duration, W, H, fps, dest: Path) -> bool:
-    frames = int(duration * fps)
-    sim = _make_sim(sim_type, W, H)
+def _encode(sim_type, frames, fps, W, H, dest: Path):
+    cx, cy = W / 2, H / 2
+    rng = random.Random(sim_type + "-seed")
+    maker = {
+        "grow": lambda: _state_grow(cx, cy, rng),
+        "shrink": lambda: _state_shrink(cx, cy, rng),
+        "squeeze": lambda: _state_squeeze(cx, cy, rng),
+        "swarm": lambda: _state_swarm(cx, cy, rng),
+        "spawn": lambda: _state_spawn(cx, cy, rng),
+        "box": lambda: _state_box(cx, cy, W, H, rng),
+        "triangle": lambda: _state_triangle(cx, cy, rng),
+        "rings": lambda: _state_rings(cx, cy, rng),
+        "race": lambda: _state_race(cx, cy, rng),
+        "gravity": lambda: _state_gravity(cx, cy, rng),
+    }[sim_type]
+    state, step_fn, draw_fn = maker()
     cmd = [
-        "ffmpeg", "-y",
-        "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(fps),
-        "-i", "-", "-an", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20",
-        "-pix_fmt", "yuv420p", str(dest),
+        "ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
+        "-r", str(fps), "-i", "-", "-an", "-c:v", "libx264", "-preset", "veryfast",
+        "-crf", "18", "-pix_fmt", "yuv420p", str(dest),
     ]
-    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     assert proc.stdin is not None
-    try:
-        for _ in range(frames):
-            img = sim()
-            proc.stdin.write(img.tobytes())
-        proc.stdin.close()
-        proc.wait(timeout=120)
-        return proc.returncode == 0 and dest.exists()
-    except Exception as exc:
-        warn(str(exc))
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        return False
+    for i in range(frames):
+        step_fn(state, 1.0 / fps, i)
+        img = Image.new("RGB", (W, H), BG)
+        draw = ImageDraw.Draw(img)
+        draw_fn(draw, state, W, H)
+        proc.stdin.write(img.tobytes())
+        if i % 90 == 0:
+            info(f"sim frame {i}/{frames}")
+    proc.stdin.close()
+    err = proc.stderr.read().decode("utf-8", "ignore") if proc.stderr else ""
+    code = proc.wait()
+    if code != 0 or not dest.exists():
+        raise RuntimeError("ffmpeg sim encode failed: " + err[-400:])
 
-def _make_sim(sim_type: str, W: int, H: int) -> Callable[[], Image.Image]:
-    makers = {
-        "grow-bounce": _sim_grow,
-        "shrink-arena": _sim_shrink,
-        "grow-and-shrink": _sim_both,
-        "split": _sim_split,
-        "color-race": _sim_race,
-        "spinning-square": _sim_spin_poly,
-        "spinning-hex": lambda w, h: _sim_spin_poly(w, h, sides=6),
-        "rings": _sim_rings,
-        "collide-spawn": _sim_collide,
-        "plinko": _sim_plinko,
-    }
-    return makers.get(sim_type, _sim_grow)(W, H)
-
-def _bg(W, H, color=(8, 8, 14)):
-    return Image.new("RGB", (W, H), color)
-
-def _draw_glow(draw, x, y, r, color, glow=18):
-    for i, a in ((int(r + glow), 28), (int(r + glow * 0.5), 70)):
-        if i <= 0:
-            continue
-        c = tuple(min(255, int(ch + (255 - ch) * 0.15)) for ch in color)
-        draw.ellipse((x - i, y - i, x + i, y + i), outline=c, width=2)
-    draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
-
-def _bounce_circle(ball: Ball, cx, cy, R):
+def _bounce_circle(ball: Ball, cx, cy, R, grow=0.0):
     dx, dy = ball.x - cx, ball.y - cy
     dist = math.hypot(dx, dy) or 0.001
-    if dist + ball.r >= R:
+    limit = R - ball.r
+    if dist >= limit:
         nx, ny = dx / dist, dy / dist
-        ball.x = cx + nx * (R - ball.r - 0.5)
-        ball.y = cy + ny * (R - ball.r - 0.5)
         dot = ball.vx * nx + ball.vy * ny
-        ball.vx -= 2 * dot * nx
-        ball.vy -= 2 * dot * ny
-        return True
-    return False
-
-def _step_free(ball: Ball):
-    ball.x += ball.vx
-    ball.y += ball.vy
-    ball.trail.append((ball.x, ball.y))
-    if len(ball.trail) > 28:
-        ball.trail.pop(0)
-
-def _draw_trails(draw, balls):
-    for ball in balls:
-        for i, (tx, ty) in enumerate(ball.trail):
-            rr = max(1, int(ball.r * (i + 1) / (len(ball.trail) + 3)))
-            col = tuple(int(c * (0.25 + 0.75 * i / max(1, len(ball.trail)))) for c in ball.color)
-            draw.ellipse((tx - rr, ty - rr, tx + rr, ty + rr), fill=col)
-
-def _sim_grow(W, H):
-    cx, cy, R = W / 2, H / 2, min(W, H) * 0.38
-    ball = Ball(cx, cy + 40, 6.2, -5.1, 14, (80, 220, 255))
-    def frame():
-        hit = False
-        _step_free(ball)
-        if _bounce_circle(ball, cx, cy, R):
-            hit = True
-            ball.r = min(R - 4, ball.r * 1.045 + 0.6)
-            ball.vx *= 1.01
-            ball.vy *= 1.01
-            if ball.r >= R - 5:
-                ball.r = 12
-                ball.x, ball.y = cx, cy + 30
-                ball.vx, ball.vy = 6.4, -5.0
-        img = _bg(W, H)
-        d = ImageDraw.Draw(img)
-        d.ellipse((cx - R, cy - R, cx + R, cy + R), outline=(70, 80, 120), width=4)
-        _draw_trails(d, [ball])
-        _draw_glow(d, ball.x, ball.y, ball.r, ball.color, 16 if hit else 10)
-        return img
-    return frame
-
-def _sim_shrink(W, H):
-    cx, cy = W / 2, H / 2
-    R = [min(W, H) * 0.40]
-    ball = Ball(cx - 20, cy, 7.0, 4.8, 16, (255, 190, 70))
-    def frame():
-        _step_free(ball)
-        if _bounce_circle(ball, cx, cy, R[0]):
-            R[0] = max(ball.r + 8, R[0] * 0.985)
-            if R[0] <= ball.r + 9:
-                R[0] = min(W, H) * 0.40
-                ball.x, ball.y = cx - 20, cy
-                ball.vx, ball.vy = 7.0, 4.8
-        img = _bg(W, H)
-        d = ImageDraw.Draw(img)
-        d.ellipse((cx - R[0], cy - R[0], cx + R[0], cy + R[0]), outline=(255, 160, 60), width=4)
-        _draw_trails(d, [ball])
-        _draw_glow(d, ball.x, ball.y, ball.r, ball.color)
-        return img
-    return frame
-
-def _sim_both(W, H):
-    cx, cy = W / 2, H / 2
-    R = [min(W, H) * 0.41]
-    ball = Ball(cx + 10, cy - 30, 5.6, 6.4, 12, (255, 90, 160))
-    def frame():
-        _step_free(ball)
-        if _bounce_circle(ball, cx, cy, R[0]):
-            ball.r = min(R[0] - 6, ball.r + 1.1)
-            R[0] = max(ball.r + 7, R[0] * 0.992)
-            if R[0] <= ball.r + 8:
-                R[0] = min(W, H) * 0.41
-                ball.r = 12
-                ball.x, ball.y = cx + 10, cy - 30
-                ball.vx, ball.vy = 5.6, 6.4
-        img = _bg(W, H)
-        d = ImageDraw.Draw(img)
-        d.ellipse((cx - R[0], cy - R[0], cx + R[0], cy + R[0]), outline=(255, 80, 150), width=4)
-        _draw_trails(d, [ball])
-        _draw_glow(d, ball.x, ball.y, ball.r, ball.color)
-        return img
-    return frame
-
-def _sim_split(W, H):
-    cx, cy, R = W / 2, H / 2, min(W, H) * 0.38
-    balls = [Ball(cx, cy, 5.5, -4.8, 11, (120, 255, 170))]
-    def frame():
-        img = _bg(W, H)
-        d = ImageDraw.Draw(img)
-        d.ellipse((cx - R, cy - R, cx + R, cy + R), outline=(80, 160, 110), width=4)
-        spawned = []
-        for ball in balls:
-            _step_free(ball)
-            if _bounce_circle(ball, cx, cy, R) and len(balls) + len(spawned) < 18:
-                ang = random.uniform(0, 6.28)
-                spawned.append(Ball(ball.x, ball.y, 4.2 * math.cos(ang), 4.2 * math.sin(ang), max(7, ball.r * 0.78), ball.color))
-                ball.r = max(7, ball.r * 0.78)
-            _draw_glow(d, ball.x, ball.y, ball.r, ball.color, 8)
-        balls.extend(spawned)
-        if len(balls) >= 18:
-            balls[:] = [Ball(cx, cy, 5.5, -4.8, 11, (120, 255, 170))]
-        return img
-    return frame
-
-def _sim_race(W, H):
-    cx, cy, R = W / 2, H / 2, min(W, H) * 0.38
-    balls = [
-        Ball(cx - 25, cy, 5.8, 4.2, 13, (70, 160, 255)),
-        Ball(cx + 25, cy, -4.4, 5.9, 13, (255, 90, 90)),
-    ]
-    def frame():
-        img = _bg(W, H)
-        d = ImageDraw.Draw(img)
-        d.ellipse((cx - R, cy - R, cx + R, cy + R), outline=(180, 180, 200), width=4)
-        for ball in balls:
-            _step_free(ball)
-            if _bounce_circle(ball, cx, cy, R):
-                ball.r = min(R - 6, ball.r + 0.9)
-            if ball.r >= R - 7:
-                balls[0].r = balls[1].r = 13
-                balls[0].x, balls[0].y = cx - 25, cy
-                balls[1].x, balls[1].y = cx + 25, cy
-            _draw_trails(d, [ball])
-            _draw_glow(d, ball.x, ball.y, ball.r, ball.color, 10)
-        return img
-    return frame
-
-def _sim_spin_poly(W, H, sides=4):
-    cx, cy = W / 2, H / 2
-    radius = min(W, H) * 0.36
-    ang = [0.0]
-    ball = Ball(cx, cy, 5.4, 3.6, 16, (255, 210, 80))
-    def frame():
-        ang[0] += 0.028
-        ball.x += ball.vx
-        ball.y += ball.vy
-        pts = []
-        for i in range(sides):
-            a = ang[0] + i * 2 * math.pi / sides
-            pts.append((cx + radius * math.cos(a), cy + radius * math.sin(a)))
-        for i in range(sides):
-            x1, y1 = pts[i]
-            x2, y2 = pts[(i + 1) % sides]
-            if _bounce_segment(ball, x1, y1, x2, y2):
-                ball.r = min(42, ball.r + 0.35)
-        img = _bg(W, H)
-        d = ImageDraw.Draw(img)
-        d.polygon(pts, outline=(220, 220, 240), width=4)
-        _draw_glow(d, ball.x, ball.y, ball.r, ball.color)
-        return img
-    return frame
-
-def _bounce_segment(ball: Ball, x1, y1, x2, y2):
-    sx, sy = x2 - x1, y2 - y1
-    sl = math.hypot(sx, sy) or 1
-    nx, ny = -sy / sl, sx / sl
-    if (ball.x - cx_fix(x1, x2)) * nx + (ball.y - cy_fix(y1, y2)) * ny > 0:
-        nx, ny = -nx, -ny
-    px, py = ball.x - x1, ball.y - y1
-    t = max(0.0, min(1.0, (px * sx + py * sy) / (sl * sl)))
-    qx, qy = x1 + t * sx, y1 + t * sy
-    dx, dy = ball.x - qx, ball.y - qy
-    dist = math.hypot(dx, dy)
-    if dist < ball.r and dist > 0:
-        nx, ny = dx / dist, dy / dist
-        ball.x = qx + nx * (ball.r + 0.6)
-        ball.y = qy + ny * (ball.r + 0.6)
-        dot = ball.vx * nx + ball.vy * ny
-        if dot < 0:
+        if dot > 0:
             ball.vx -= 2 * dot * nx
             ball.vy -= 2 * dot * ny
+        ball.x = cx + nx * (limit - 0.4)
+        ball.y = cy + ny * (limit - 0.4)
+        if grow:
+            ball.r = min(ball.r + grow, max(4.0, R - 3))
         return True
     return False
 
-def cx_fix(a, b):
-    return (a + b) / 2
+def _integrate(ball: Ball, dt, gravity=0.0):
+    ball.vy += gravity * dt
+    ball.x += ball.vx * dt
+    ball.y += ball.vy * dt
+    ball.trail.append((ball.x, ball.y))
+    if len(ball.trail) > 18:
+        ball.trail.pop(0)
 
-def cy_fix(a, b):
-    return (a + b) / 2
+def _draw_trail(draw, ball):
+    for i, (x, y) in enumerate(ball.trail):
+        t = (i + 1) / max(1, len(ball.trail))
+        rr = max(1, int(ball.r * 0.25 * t))
+        col = tuple(int(c * (0.25 + 0.75 * t)) for c in ball.color)
+        draw.ellipse([x - rr, y - rr, x + rr, y + rr], fill=col)
 
-def _sim_rings(W, H):
-    cx, cy = W / 2, H / 2
-    rings = [min(W, H) * s for s in (0.18, 0.28, 0.38)]
-    gaps = [0.0, 1.2, 2.4]
-    spin = [0.018, -0.022, 0.016]
-    ball = Ball(cx, cy, 4.8, 0.6, 10, (255, 240, 120))
-    def frame():
-        ball.x += ball.vx
-        ball.y += ball.vy
-        dist = math.hypot(ball.x - cx, ball.y - cy) or 0.001
-        ang = math.atan2(ball.y - cy, ball.x - cx)
-        for i, R in enumerate(rings):
-            gaps[i] += spin[i]
-            gap = (gaps[i]) % (2 * math.pi)
-            in_gap = abs((_wrap(ang - gap))) < 0.42
-            if abs(dist + ball.r - R) < 6 and not in_gap:
-                nx, ny = (ball.x - cx) / dist, (ball.y - cy) / dist
-                if dist < R:
-                    ball.x = cx + nx * (R - ball.r - 1)
-                    ball.y = cy + ny * (R - ball.r - 1)
-                else:
-                    ball.x = cx + nx * (R + ball.r + 1)
-                    ball.y = cy + ny * (R + ball.r + 1)
+def _draw_ball(draw, ball):
+    _draw_trail(draw, ball)
+    r = ball.r
+    draw.ellipse([ball.x - r, ball.y - r, ball.x + r, ball.y + r], fill=ball.color)
+    glow = max(2, r * 0.35)
+    draw.ellipse([ball.x - glow, ball.y - glow - r * 0.2, ball.x + glow * 0.6, ball.y + glow * 0.2], fill=(255, 255, 255))
+
+def _draw_ring(draw, cx, cy, R, color=INK, width=6):
+    draw.ellipse([cx - R, cy - R, cx + R, cy + R], outline=color, width=width)
+
+def _state_grow(cx, cy, rng):
+    R = [250]
+    ball = Ball(cx, cy + 40, rng.uniform(-180, 180), rng.uniform(-220, -80), 16, (80, 190, 255))
+    def step(state, dt, i):
+        _integrate(ball, dt)
+        _bounce_circle(ball, cx, cy, R[0], grow=2.4)
+    def draw(d, state, W, H):
+        _draw_ring(d, cx, cy, R[0])
+        _draw_ball(d, ball)
+    return {"ball": ball}, step, draw
+
+def _state_shrink(cx, cy, rng):
+    R = [270]
+    ball = Ball(cx - 20, cy, rng.uniform(160, 240), rng.uniform(-90, 90), 18, (255, 90, 130))
+    def step(state, dt, i):
+        _integrate(ball, dt)
+        if _bounce_circle(ball, cx, cy, R[0], grow=0):
+            R[0] = max(ball.r + 8, R[0] - 3.2)
+    def draw(d, state, W, H):
+        _draw_ring(d, cx, cy, R[0], (255, 170, 180))
+        _draw_ball(d, ball)
+    return {}, step, draw
+
+def _state_squeeze(cx, cy, rng):
+    R = [265]
+    ball = Ball(cx + 10, cy - 30, 170, -150, 14, (255, 210, 70))
+    def step(state, dt, i):
+        _integrate(ball, dt)
+        if _bounce_circle(ball, cx, cy, R[0], grow=1.8):
+            R[0] = max(ball.r + 6, R[0] - 2.2)
+    def draw(d, state, W, H):
+        _draw_ring(d, cx, cy, R[0], (255, 230, 140))
+        _draw_ball(d, ball)
+    return {}, step, draw
+
+def _state_swarm(cx, cy, rng):
+    R = 255
+    colors = [(80, 190, 255), (255, 90, 130), (120, 255, 160), (255, 210, 70), (200, 140, 255)]
+    balls = []
+    for i in range(8):
+        ang = rng.random() * 6.28
+        spd = rng.uniform(90, 220)
+        balls.append(Ball(cx + rng.uniform(-40, 40), cy + rng.uniform(-40, 40), math.cos(ang) * spd, math.sin(ang) * spd, rng.uniform(10, 16), colors[i % 5]))
+    def step(state, dt, i):
+        for b in balls:
+            _integrate(b, dt)
+            _bounce_circle(b, cx, cy, R, grow=0)
+        _ball_collisions(balls)
+    def draw(d, state, W, H):
+        _draw_ring(d, cx, cy, R)
+        for b in balls:
+            _draw_ball(d, b)
+    return {}, step, draw
+
+def _state_spawn(cx, cy, rng):
+    R = 250
+    colors = [(80, 190, 255), (255, 90, 130), (120, 255, 160), (255, 210, 70), (200, 140, 255)]
+    balls = [Ball(cx, cy, 160, -40, 14, colors[0])]
+    def step(state, dt, i):
+        extra = []
+        for b in balls:
+            _integrate(b, dt)
+            if _bounce_circle(b, cx, cy, R, grow=0.4) and len(balls) + len(extra) < 18 and rng.random() < 0.35:
+                ang = rng.random() * 6.28
+                extra.append(Ball(b.x, b.y, math.cos(ang) * 180, math.sin(ang) * 180, max(8, b.r * 0.7), colors[len(balls) % 5]))
+        balls.extend(extra)
+        _ball_collisions(balls)
+    def draw(d, state, W, H):
+        _draw_ring(d, cx, cy, R)
+        for b in balls:
+            _draw_ball(d, b)
+    return {}, step, draw
+
+def _state_box(cx, cy, W, H, rng):
+    left, top, right, bottom = 70, 180, W - 70, H - 180
+    ball = Ball(cx, cy, 210, -160, 18, (120, 255, 160))
+    def step(state, dt, i):
+        _integrate(ball, dt)
+        hit = False
+        if ball.x - ball.r <= left:
+            ball.x = left + ball.r + 0.4
+            ball.vx = abs(ball.vx)
+            hit = True
+        if ball.x + ball.r >= right:
+            ball.x = right - ball.r - 0.4
+            ball.vx = -abs(ball.vx)
+            hit = True
+        if ball.y - ball.r <= top:
+            ball.y = top + ball.r + 0.4
+            ball.vy = abs(ball.vy)
+            hit = True
+        if ball.y + ball.r >= bottom:
+            ball.y = bottom - ball.r - 0.4
+            ball.vy = -abs(ball.vy)
+            hit = True
+        if hit:
+            max_r = min((right - left) / 2 - 4, (bottom - top) / 2 - 4)
+            ball.r = min(ball.r + 3.0, max_r)
+    def draw(d, state, Ww, Hh):
+        d.rectangle([left, top, right, bottom], outline=INK, width=6)
+        _draw_ball(d, ball)
+    return {}, step, draw
+
+def _state_triangle(cx, cy, rng):
+    pts = [(cx, cy - 230), (cx + 230, cy + 200), (cx - 230, cy + 200)]
+    ball = Ball(cx, cy + 40, 150, -170, 16, (200, 140, 255))
+    def step(state, dt, i):
+        _integrate(ball, dt)
+        if _bounce_polygon(ball, pts, grow=2.6):
+            pass
+    def draw(d, state, W, H):
+        d.polygon(pts, outline=INK)
+        d.line(pts + [pts[0]], fill=INK, width=6)
+        _draw_ball(d, ball)
+    return {}, step, draw
+
+def _state_rings(cx, cy, rng):
+    radii = [90, 150, 210, 270]
+    gaps = [0.7, 0.9, 1.2, 1.5]
+    speeds = [1.1, -0.8, 0.6, -0.45]
+    angles = [0.0, 1.0, 2.0, 3.0]
+    ball = Ball(cx, cy, 0, -220, 12, (255, 210, 70))
+    def step(state, dt, i):
+        _integrate(ball, dt)
+        for k, R in enumerate(radii):
+            angles[k] += speeds[k] * dt
+            dx, dy = ball.x - cx, ball.y - cy
+            dist = math.hypot(dx, dy)
+            if abs(dist - R) < ball.r + 3:
+                ang = math.atan2(dy, dx)
+                gap_center = angles[k]
+                diff = abs((_wrap(ang - gap_center)))
+                if diff < gaps[k] / 2:
+                    continue
+                nx, ny = dx / (dist or 1), dy / (dist or 1)
                 dot = ball.vx * nx + ball.vy * ny
-                ball.vx -= 2 * dot * nx
-                ball.vy -= 2 * dot * ny
-        if dist > rings[-1] + 30:
-            ball.x, ball.y, ball.vx, ball.vy = cx, cy, 4.8, 0.8
-        img = _bg(W, H)
-        d = ImageDraw.Draw(img)
-        for i, R in enumerate(rings):
-            d.ellipse((cx - R, cy - R, cx + R, cy + R), outline=(90, 140, 255), width=3)
-            gap = gaps[i]
-            gx = cx + R * math.cos(gap)
-            gy = cy + R * math.sin(gap)
-            d.ellipse((gx - 8, gy - 8, gx + 8, gy + 8), fill=(8, 8, 14))
-        _draw_glow(d, ball.x, ball.y, ball.r, ball.color)
-        return img
-    return frame
+                going_out = dist >= R
+                if (going_out and dot > 0) or ((not going_out) and dot < 0):
+                    ball.vx -= 2 * dot * nx
+                    ball.vy -= 2 * dot * ny
+                    ball.x = cx + nx * (R + (-ball.r - 2 if going_out else ball.r + 2))
+                    ball.y = cy + ny * (R + (-ball.r - 2 if going_out else ball.r + 2))
+        if math.hypot(ball.x - cx, ball.y - cy) > 330:
+            ball.x, ball.y, ball.vx, ball.vy = cx, cy, rng.uniform(-80, 80), -220
+    def draw(d, state, W, H):
+        for k, R in enumerate(radii):
+            _draw_arc_gap(d, cx, cy, R, angles[k], gaps[k])
+        _draw_ball(d, ball)
+    return {}, step, draw
+
+def _state_race(cx, cy, rng):
+    R = 255
+    a = Ball(cx - 18, cy, -140, -180, 12, (80, 190, 255))
+    b = Ball(cx + 18, cy, 150, -160, 12, (255, 90, 130))
+    def step(state, dt, i):
+        for ball in (a, b):
+            _integrate(ball, dt)
+            _bounce_circle(ball, cx, cy, R, grow=1.5)
+        _ball_collisions([a, b])
+    def draw(d, state, W, H):
+        _draw_ring(d, cx, cy, R)
+        _draw_ball(d, a)
+        _draw_ball(d, b)
+    return {}, step, draw
+
+def _state_gravity(cx, cy, rng):
+    R = 260
+    colors = [(80, 190, 255), (255, 210, 70), (120, 255, 160), (255, 90, 130)]
+    balls = [Ball(cx + rng.uniform(-30, 30), cy - 80, rng.uniform(-40, 40), 0, 14, colors[i]) for i in range(4)]
+    def step(state, dt, i):
+        for b in balls:
+            _integrate(b, dt, gravity=520)
+            _bounce_circle(b, cx, cy, R, grow=0)
+            b.vx *= 0.999
+            b.vy *= 0.999
+        _ball_collisions(balls)
+    def draw(d, state, W, H):
+        _draw_ring(d, cx, cy, R, (180, 200, 255))
+        for b in balls:
+            _draw_ball(d, b)
+    return {}, step, draw
+
+def _ball_collisions(balls):
+    for i in range(len(balls)):
+        for j in range(i + 1, len(balls)):
+            a, b = balls[i], balls[j]
+            dx, dy = b.x - a.x, b.y - a.y
+            dist = math.hypot(dx, dy) or 0.001
+            min_d = a.r + b.r
+            if dist < min_d:
+                nx, ny = dx / dist, dy / dist
+                overlap = min_d - dist
+                a.x -= nx * overlap / 2
+                a.y -= ny * overlap / 2
+                b.x += nx * overlap / 2
+                b.y += ny * overlap / 2
+                va = a.vx * nx + a.vy * ny
+                vb = b.vx * nx + b.vy * ny
+                a.vx += (vb - va) * nx
+                a.vy += (vb - va) * ny
+                b.vx += (va - vb) * nx
+                b.vy += (va - vb) * ny
+
+def _bounce_polygon(ball: Ball, pts, grow=0.0):
+    hit = False
+    n = len(pts)
+    for i in range(n):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        if _reflect_segment(ball, x1, y1, x2, y2):
+            hit = True
+            if grow:
+                ball.r = min(ball.r + grow, 90)
+    return hit
+
+def _reflect_segment(ball, x1, y1, x2, y2):
+    vx, vy = x2 - x1, y2 - y1
+    ln = math.hypot(vx, vy) or 1
+    nx, ny = -vy / ln, vx / ln
+    px, py = ball.x - x1, ball.y - y1
+    dist = px * nx + py * ny
+    if abs(dist) > ball.r + 1:
+        return False
+    t = (px * vx + py * vy) / (ln * ln)
+    if t < 0 or t > 1:
+        return False
+    if dist < 0:
+        nx, ny = -nx, -ny
+        dist = -dist
+    dot = ball.vx * nx + ball.vy * ny
+    if dot < 0:
+        ball.vx -= 2 * dot * nx
+        ball.vy -= 2 * dot * ny
+        ball.x += nx * (ball.r + 1 - dist)
+        ball.y += ny * (ball.r + 1 - dist)
+        return True
+    return False
 
 def _wrap(a):
     while a > math.pi:
@@ -345,106 +385,29 @@ def _wrap(a):
         a += 2 * math.pi
     return a
 
-def _sim_collide(W, H):
-    cx, cy, R = W / 2, H / 2, min(W, H) * 0.38
-    palette = [(80, 200, 255), (255, 110, 110), (120, 255, 160), (255, 210, 80), (200, 130, 255)]
-    balls = [
-        Ball(cx - 30, cy, 5.2, 3.4, 12, palette[0]),
-        Ball(cx + 30, cy, -3.8, 5.0, 12, palette[1]),
-    ]
-    def frame():
-        img = _bg(W, H)
-        d = ImageDraw.Draw(img)
-        d.ellipse((cx - R, cy - R, cx + R, cy + R), outline=(120, 120, 160), width=4)
-        extra = []
-        for i, ball in enumerate(balls):
-            _step_free(ball)
-            _bounce_circle(ball, cx, cy, R)
-            for j in range(i + 1, len(balls)):
-                other = balls[j]
-                dx, dy = other.x - ball.x, other.y - ball.y
-                dist = math.hypot(dx, dy) or 0.001
-                if dist < ball.r + other.r and len(balls) + len(extra) < 16:
-                    extra.append(Ball(
-                        (ball.x + other.x) / 2, (ball.y + other.y) / 2,
-                        -dy * 0.15, dx * 0.15, 10, palette[len(balls) % len(palette)],
-                    ))
-                    nx, ny = dx / dist, dy / dist
-                    overlap = ball.r + other.r - dist
-                    ball.x -= nx * overlap / 2
-                    ball.y -= ny * overlap / 2
-                    other.x += nx * overlap / 2
-                    other.y += ny * overlap / 2
-            _draw_glow(d, ball.x, ball.y, ball.r, ball.color, 8)
-        balls.extend(extra)
-        if len(balls) >= 16:
-            balls[:] = [
-                Ball(cx - 30, cy, 5.2, 3.4, 12, palette[0]),
-                Ball(cx + 30, cy, -3.8, 5.0, 12, palette[1]),
-            ]
-        return img
-    return frame
+def _draw_arc_gap(draw, cx, cy, R, mid, gap):
+    start = math.degrees(mid + gap / 2)
+    end = math.degrees(mid - gap / 2 + 2 * math.pi)
+    bbox = [cx - R, cy - R, cx + R, cy + R]
+    draw.arc(bbox, start=start, end=end, fill=INK, width=7)
 
-def _sim_plinko(W, H):
-    pegs = []
-    for row in range(8):
-        count = 4 + row
-        for col in range(count):
-            x = W * (col + 1) / (count + 1)
-            y = 140 + row * 70
-            pegs.append((x, y))
-    balls = [Ball(W / 2, 40, random.uniform(-1.2, 1.2), 1.4, 9, (255, 220, 90))]
-    spawn = [0]
-    def frame():
-        spawn[0] += 1
-        if spawn[0] % 28 == 0 and len(balls) < 12:
-            balls.append(Ball(W / 2 + random.uniform(-20, 20), 40, random.uniform(-1.4, 1.4), 1.5, 9, random.choice([(255, 220, 90), (90, 200, 255), (255, 120, 160)])))
-        img = _bg(W, H, (10, 10, 18))
-        d = ImageDraw.Draw(img)
-        for px, py in pegs:
-            d.ellipse((px - 6, py - 6, px + 6, py + 6), fill=(180, 180, 200))
-        alive = []
-        for ball in balls:
-            ball.vy += 0.18
-            ball.x += ball.vx
-            ball.y += ball.vy
-            if ball.x < ball.r or ball.x > W - ball.r:
-                ball.vx *= -0.9
-                ball.x = min(max(ball.x, ball.r), W - ball.r)
-            for px, py in pegs:
-                dx, dy = ball.x - px, ball.y - py
-                dist = math.hypot(dx, dy) or 0.001
-                if dist < ball.r + 6:
-                    nx, ny = dx / dist, dy / dist
-                    ball.x = px + nx * (ball.r + 7)
-                    ball.y = py + ny * (ball.r + 7)
-                    dot = ball.vx * nx + ball.vy * ny
-                    ball.vx -= 1.6 * dot * nx
-                    ball.vy -= 1.6 * dot * ny
-            if ball.y < H + 20:
-                alive.append(ball)
-                _draw_glow(d, ball.x, ball.y, ball.r, ball.color, 6)
-        balls[:] = alive or [Ball(W / 2, 40, 0.4, 1.4, 9, (255, 220, 90))]
-        return img
-    return frame
-
-def _scale_and_silence(src: Path, duration: float, W: int, H: int, dest: Path):
+def _scale_silent(video: Path, duration: float, W, H, dest: Path):
     cmd = [
-        "ffmpeg", "-y", "-i", str(src),
+        "ffmpeg", "-y", "-i", str(video),
         "-f", "lavfi", "-t", f"{duration:.3f}", "-i", "anullsrc=r=44100:cl=stereo",
         "-vf", f"scale={W}:{H}:flags=lanczos",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "17", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(dest),
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0 or not dest.exists():
-        warn((proc.stderr or "")[-300:])
-        raise RuntimeError("Could not finish simulation export")
+        warn(proc.stderr[-300:] if proc.stderr else "scale failed")
+        raise RuntimeError("Could not finish simulation video")
 
 def _write_meta(sim_type, duration, out_root: Path):
     title = f"{TYPES[sim_type]}"
-    desc = f"Silent physics simulation. No voice. No captions.\n{TYPES[sim_type]}\n"
+    desc = f"Silent satisfying simulation: {TYPES[sim_type]}. No voice. No captions.\n"
     save_text(out_root / "title.txt", title + "\n")
-    save_text(out_root / "description.txt", desc + "\n#Shorts #simulation #satisfying\n")
-    save_text(out_root / "hashtags.txt", "#Shorts #simulation #satisfying\n")
-    save_text(out_root / "tags.txt", "simulation,satisfying,shorts,physics\n")
+    save_text(out_root / "description.txt", desc + "\n#Shorts #satisfying #simulation\n")
+    save_text(out_root / "hashtags.txt", "#Shorts #satisfying #simulation\n")
+    save_text(out_root / "tags.txt", "simulation,satisfying,shorts,silent\n")
