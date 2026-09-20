@@ -1,14 +1,14 @@
-"""Write a spoken Short that stays on-topic and sounds connected."""
+"""Write a spoken Short that stays on the exact prompt."""
 from __future__ import annotations
 import re
-from .minecraft_kb import minecraft_topic, minecraft_visuals, topic_keys
+from .minecraft_kb import minecraft_topic, minecraft_visuals, specific_keys, topic_keys
 from .research import clean_topic_query, visual_lookups
 from .utils import info, unique_keep_order
 
 def generate_script(research, target_duration=32, language="en"):
-    topic = research.get("topic") or "this topic"
+    topic = (research.get("topic") or "this topic").strip()
     focus = clean_topic_query(topic)
-    info(f"Script locked to: {focus}")
+    info(f"Script locked to prompt: {topic}")
     facts = unique_keep_order([_spoken(f) for f in (research.get("facts") or []) if _on_topic(f, topic)])
     script = _flowing_script(topic, focus, facts)
     script["full_narration"] = _compose_narration(script)
@@ -18,49 +18,42 @@ def generate_script(research, target_duration=32, language="en"):
 
 def _on_topic(text, topic):
     low = text.lower()
-    if "crystal" in topic.lower():
-        return any(w in low for w in ("crystal", "obsidian", "bedrock", "totem", "pearl"))
-    keys = [k for k in topic_keys(topic) if k != "minecraft"]
+    keys = specific_keys(topic)
     if not keys:
         return True
-    return any(k in low for k in keys)
+    return any(k in low or k.rstrip("s") in low for k in keys)
 
 def _compose_narration(script):
     parts = [script.get("hook", ""), script.get("interest", "")] + list(script.get("body") or []) + [script.get("ending", "")]
-    text = " ".join(p.strip() for p in parts if p and p.strip())
-    return re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"\s+", " ", " ".join(p.strip() for p in parts if p and p.strip())).strip()
 
 def _flowing_script(topic, focus, facts):
-    short = focus if len(focus.split()) <= 5 else " ".join(focus.split()[:5])
-    hook = f"Wait. This is {short}."
-    hook_card = short[:28]
+    hook = f"This is about {topic}."
+    hook_card = topic if len(topic) <= 32 else focus[:32]
     if facts:
-        interest = f"Stay for this. {facts[0]}"
+        interest = f"Stay. {facts[0]}"
         rest = facts[1:]
     else:
-        interest = f"Stay. This whole Short is about {short}."
+        interest = f"Stay. Everything after this is still {topic}."
         rest = []
-    links = ["Here's why.", "And this part matters.", "Then remember this.", "One more thing."]
+    links = ["Here's the next part.", "And this matters.", "Remember this.", "One more point."]
     body = []
     for i, fact in enumerate(rest[:4]):
         body.append(f"{links[i % len(links)]} {fact}")
-    if not body and facts:
-        body = facts[1:3]
-    ending = f"Follow if you want more {short}."
+    ending = f"Follow for more on {topic}."
     return {
         "hook": hook,
         "hook_card": hook_card,
         "interest": interest,
         "body": body,
         "ending": ending,
-        "title_seed": short,
-        "provider": "flow",
+        "title_seed": topic,
+        "provider": "prompt-lock",
     }
 
 def _spoken(sentence):
     s = re.sub(r"\s+", " ", sentence).strip()
     s = re.sub(r"^(In Minecraft, |Minecraft |A true Minecraft |The Minecraft )", "", s)
-    s = s.replace("A true ", "")
     if not s.endswith((".", "!", "?")):
         s += "."
     words = s.split()
@@ -76,10 +69,10 @@ def _plan_scenes(script, research):
     units = [(k, t.strip()) for k, t in units if t and t.strip()]
     topic = research.get("topic") or ""
     lookups = minecraft_visuals(topic) if minecraft_topic(topic) else visual_lookups(topic)
-    tokens = topic_keys(topic) or [clean_topic_query(topic).lower()]
+    tokens = specific_keys(topic) or topic_keys(topic) or [clean_topic_query(topic).lower()]
     scenes = []
     for i, (kind, text) in enumerate(units):
-        query = lookups[i % len(lookups)] if lookups else clean_topic_query(topic)
+        query = lookups[i % len(lookups)] if lookups else topic
         scenes.append({
             "index": i + 1,
             "text": text,
