@@ -30,18 +30,21 @@ on:
           - building
           - simulation
       simulation_type:
-        description: "Simulation subtype (only used when mode or category is simulation)"
+        description: "Simulation type (only for mode/category = simulation)"
         required: false
         type: choice
-        default: crystal
+        default: grow
         options:
-          - crystal
-          - redstone
+          - grow
+          - shrink
+          - squeeze
+          - swarm
+          - spawn
+          - box
+          - triangle
+          - rings
+          - race
           - gravity
-          - portal
-          - life
-          - fire
-          - rain
       topic:
         description: "Your Minecraft prompt (used when mode is prompt)"
         required: false
@@ -93,16 +96,13 @@ jobs:
           if [ -f "$RUNDIR/hashtags.txt" ]; then
             cp "$RUNDIR/hashtags.txt" youtube-upload/youtube-hashtags.txt
           else
-            echo "#Shorts #Minecraft" > youtube-upload/youtube-hashtags.txt
+            echo "#Shorts #satisfying #simulation" > youtube-upload/youtube-hashtags.txt
           fi
-          cp "$RUNDIR/tags.txt" youtube-upload/youtube-tags.txt || true
           {
             echo "Mode: ${{ github.event.inputs.mode }}"
-            echo "Category: ${{ github.event.inputs.category }}"
             echo "Simulation: ${{ github.event.inputs.simulation_type }}"
             echo "Duration: ${{ github.event.inputs.duration }}"
           } > youtube-upload/README.txt
-          ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 youtube-upload/video.mp4 || true
 
       - name: Upload Short files
         uses: actions/upload-artifact@v4
