@@ -142,12 +142,13 @@ def _fit_length(src, dest, duration, fps):
         raise RuntimeError("Could not fit video length to narration")
 
 def _write_ass(groups, path, W, H, cap_cfg, hook_card=""):
-    size = int(cap_cfg.get("font_size", 68))
-    hook_size = max(72, size + 10)
-    header = f"""[Script Info]\nScriptType: v4.00+\nPlayResX: {W}\nPlayResY: {H}\nWrapStyle: 2\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Lato,{size},&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,0,2,70,70,{int(H * 0.28)},1\nStyle: Hook,Lato,{hook_size},&H00FFFFFF,&H0000FFFF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,6,0,8,50,50,{int(H * 0.16)},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
+    size = int(cap_cfg.get("font_size", 42))
+    hook_size = max(48, size + 6)
+    margin_v = int(H * 0.12)
+    header = f"""[Script Info]\nScriptType: v4.00+\nPlayResX: {W}\nPlayResY: {H}\nWrapStyle: 2\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,Lato,{size},&H00FFFFFF,&H0000FFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,3,0,2,80,80,{margin_v},1\nStyle: Hook,Lato,{hook_size},&H00FFFFFF,&H0000FFFF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,4,0,8,60,60,{int(H * 0.10)},1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"""
     events = []
     if hook_card:
-        events.append(f"Dialogue: 1,0:00:00.00,0:00:02.80,Hook,,0,0,0,,{_ass_escape(hook_card)}")
+        events.append(f"Dialogue: 1,0:00:00.00,0:00:02.40,Hook,,0,0,0,,{_ass_escape(hook_card)}")
     for g in groups or []:
         text = _ass_escape(g.get("text") or "")
         events.append(f"Dialogue: 0,{_ass_time(g['start'])},{_ass_time(g['end'])},Default,,0,0,0,,{text}")
@@ -172,7 +173,7 @@ def _burn_subtitles(video, ass_path, dest):
 
 def _mix_audio(narration, music_path, dest, duration, music_cfg):
     if music_path and Path(music_path).exists() and music_cfg.get("enabled", True):
-        vol = float(music_cfg.get("duck_volume", 0.07))
+        vol = float(music_cfg.get("duck_volume", 0.08))
         cmd = ["ffmpeg", "-y", "-i", narration, "-stream_loop", "-1", "-i", str(music_path), "-t", f"{duration:.3f}", "-filter_complex", f"[1:a]volume={vol}[m];[0:a][m]amix=inputs=2:duration=first:dropout_transition=2[a]", "-map", "[a]", "-ar", "44100", "-ac", "2", "-c:a", "aac", "-b:a", "192k", str(dest)]
         if _run(cmd):
             return
