@@ -17,7 +17,7 @@ def mix_sim_audio(video: Path, dest: Path, duration: float, hit_times: list[floa
         f"[0:v]scale={W}:{H}:flags=lanczos[v];[1:a]volume=0.16[m];[2:a]volume=0.55[c];[m][c]amix=inputs=2:duration=longest[a]",
         "-map", "[v]", "-map", "[a]",
         "-c:v", "libx264", "-preset", "fast", "-crf", "17", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-shortest", "-movflags", "+faststart", str(dest),
+        "-c:a", "aac", "-t", f"{duration:.3f}", "-movflags", "+faststart", str(dest),
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True)
     if proc.returncode != 0 or not dest.exists():
