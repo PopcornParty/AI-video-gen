@@ -16,7 +16,7 @@ TYPES = {
     "rings": "rings", "race": "race", "split": "split", "random": "random",
 }
 SHAPES = ("circle", "square", "triangle", "hexagon")
-SPEEDS = {"slow": 0.7, "normal": 1.0, "fast": 1.45}
+SPEEDS = {"slow": 0.95, "normal": 1.35, "fast": 1.85}
 NEON = [(0, 255, 255), (255, 40, 180), (180, 255, 40), (255, 220, 0), (80, 140, 255), (255, 90, 40)]
 RAINBOW = [(255, 60, 60), (255, 160, 0), (255, 230, 40), (40, 220, 90), (40, 180, 255), (180, 70, 255)]
 TWOTONE = [(0, 220, 255), (255, 50, 160)]
@@ -43,7 +43,7 @@ def render_simulation(sim_type: str, duration: float, cfg: dict, out_root: Path,
     shape = (options.get("shape") or "circle").lower()
     if shape not in SHAPES:
         shape = "circle"
-    speed = SPEEDS.get((options.get("speed") or "fast").lower(), 1.45)
+    speed = SPEEDS.get((options.get("speed") or "fast").lower(), 1.85)
     palette = {"rainbow": RAINBOW, "two-tone": TWOTONE}.get((options.get("colors") or "neon").lower(), NEON)
     music_on = str(options.get("music", "on")).lower() != "off"
     W, H, fps = 540, 960, 30
@@ -169,7 +169,7 @@ def _bounce_arena(ball, arena, cx, cy, hits):
 
 def _move(ball, dt):
     ball.x += ball.vx * dt; ball.y += ball.vy * dt
-    ball.trail.append((ball.x, ball.y)); del ball.trail[:-16]
+    ball.trail.append((ball.x, ball.y)); del ball.trail[:-28]
 
 def _circle_hit(ball, cx, cy, R):
     dx, dy = ball.x - cx, ball.y - cy
@@ -184,8 +184,8 @@ def _resolve_circle(ball, cx, cy, R, dx, dy, dist):
     if dot > 0:
         ball.vx -= 2 * dot * nx; ball.vy -= 2 * dot * ny
     spd = math.hypot(ball.vx, ball.vy)
-    if spd < 160:
-        ball.vx *= 200 / max(spd, 1); ball.vy *= 200 / max(spd, 1)
+    if spd < 220:
+        ball.vx *= 280 / max(spd, 1); ball.vy *= 280 / max(spd, 1)
 
 def _new_bounce(ball, hitting):
     fresh = hitting and not ball.touching
@@ -194,7 +194,7 @@ def _new_bounce(ball, hitting):
 
 def _draw_ball(d, ball):
     for i, (x, y) in enumerate(ball.trail):
-        t = (i + 1) / max(1, len(ball.trail)); rr = max(1.2, ball.r * 0.2 * t)
+        t = (i + 1) / max(1, len(ball.trail)); rr = max(1.2, ball.r * 0.22 * t)
         col = tuple(int(c * (0.25 + 0.75 * t)) for c in ball.color)
         d.ellipse([x - rr, y - rr, x + rr, y + rr], fill=col)
     r = ball.r
@@ -203,9 +203,21 @@ def _draw_ball(d, ball):
     d.ellipse([ball.x - g, ball.y - g - r * 0.16, ball.x + g * 0.5, ball.y], fill=(255, 255, 255))
 
 def _mk(cx, cy, rng, palette, speed, r=13, team=0):
-    ang = rng.random() * math.tau; spd = rng.uniform(280, 420) * speed
+    ang = rng.random() * math.tau
+    spd = rng.uniform(360, 560) * speed
     col = palette[team % len(palette)]
-    return Ball(cx + rng.uniform(-20, 20), cy + rng.uniform(-20, 20), math.cos(ang) * spd, math.sin(ang) * spd, r, col, team)
+    return Ball(cx, cy, math.cos(ang) * spd, math.sin(ang) * spd, r, col, team)
+
+def _spread(cx, cy, rng, palette, speed, n, r=12, teams=3):
+    balls = []
+    for i in range(n):
+        ang = (i / max(1, n)) * math.tau
+        rad = 70 + (i % 4) * 22
+        b = _mk(cx + math.cos(ang) * rad, cy + math.sin(ang) * rad, rng, palette, speed, r + (i % 3), team=i % teams)
+        b.x = cx + math.cos(ang) * rad
+        b.y = cy + math.sin(ang) * rad
+        balls.append(b)
+    return balls
 
 def _collide(balls):
     for i in range(len(balls)):
@@ -274,7 +286,7 @@ def _squeeze(cx, cy, W, H, shape, speed, palette, rng):
 def _colorfight(cx, cy, W, H, shape, speed, palette, rng):
     arena = _arena(shape, cx, cy, W, H)
     teams = 3 if len(palette) > 2 else 2
-    balls = [_mk(cx, cy, rng, palette, speed, 11, team=i % teams) for i in range(teams * 6)]
+    balls = _spread(cx, cy, rng, palette, speed, teams * 6, r=11, teams=teams)
     seen = set(); won = [False]
     def step(dt, hits):
         for b in balls:
@@ -309,7 +321,7 @@ def _paint(cx, cy, W, H, shape, speed, palette, rng):
 
 def _merge(cx, cy, W, H, shape, speed, palette, rng):
     arena = _arena(shape, cx, cy, W, H)
-    balls = [_mk(cx, cy, rng, palette, speed, rng.uniform(10, 14), team=i % 3) for i in range(9)]
+    balls = _spread(cx, cy, rng, palette, speed, 12, r=12, teams=3)
     seen = set()
     def step(dt, hits):
         live = [b for b in balls if b.alive]
@@ -327,17 +339,22 @@ def _merge(cx, cy, W, H, shape, speed, palette, rng):
 
 def _king(cx, cy, W, H, shape, speed, palette, rng):
     arena = _arena(shape, cx, cy, W, H)
-    balls = [_mk(cx, cy, rng, palette, speed, 12, team=i % 3) for i in range(10)]
+    balls = _spread(cx, cy, rng, palette, speed, 12, r=13, teams=3)
     seen = set()
+    grace = [90]
     def step(dt, hits):
+        grace[0] = max(0, grace[0] - 1)
         live = [b for b in balls if b.alive]
         for b in live:
             _move(b, dt); _bounce_arena(b, arena, cx, cy, hits)
+        if grace[0]:
+            list(_collide(live))
+            return
         for a, b in _fresh_pairs(live, seen):
-            if a.r >= b.r:
-                a.r = min(42, a.r + 1.8); b.alive = False
-            else:
-                b.r = min(42, b.r + 1.8); a.alive = False
+            if a.r > b.r + 1.2:
+                a.r = min(44, a.r + 2.2); b.alive = False
+            elif b.r > a.r + 1.2:
+                b.r = min(44, b.r + 2.2); a.alive = False
     def draw(d, Ww, Hh):
         _draw_arena(d, arena, cx, cy)
         for b in balls:
@@ -346,7 +363,7 @@ def _king(cx, cy, W, H, shape, speed, palette, rng):
     return step, draw, lambda: sum(1 for b in balls if b.alive) == 1
 
 def _swarm(cx, cy, W, H, shape, speed, palette, rng):
-    arena = _arena(shape, cx, cy, W, H); balls = [_mk(cx, cy, rng, palette, speed, 12, team=i) for i in range(8)]; n = [0]
+    arena = _arena(shape, cx, cy, W, H); balls = _spread(cx, cy, rng, palette, speed, 10, r=12, teams=10); n = [0]
     def step(dt, hits):
         for b in balls:
             _move(b, dt)
@@ -403,7 +420,10 @@ def _rings(cx, cy, speed, palette, rng):
     return step, draw, lambda: escaped[0]
 
 def _race(cx, cy, W, H, shape, speed, palette, rng):
-    arena = _arena(shape, cx, cy, W, H); a = _mk(cx - 18, cy, rng, palette, speed, 12, 0); b = _mk(cx + 18, cy, rng, palette, speed, 12, 1); cap = arena.get("R", 240) - 8
+    arena = _arena(shape, cx, cy, W, H)
+    a = _mk(cx - 70, cy - 40, rng, palette, speed, 12, 0)
+    b = _mk(cx + 70, cy + 40, rng, palette, speed, 12, 1)
+    cap = arena.get("R", 240) - 8
     def step(dt, hits):
         for ball in (a, b):
             _move(ball, dt)
