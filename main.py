@@ -21,7 +21,7 @@ from src.music import get_music_track
 from src.research import research_topic
 from src.scene_generator import build_timed_scenes
 from src.script_generator import generate_script
-from src.simulation import TYPES, render_simulation, simulation_types
+from src.simulation import render_simulation
 from src.utils import ensure_dir, info, save_json, save_text, slugify, step, warn
 from src.video_editor import render_short
 from src.visual_search import find_visuals_for_scenes
@@ -35,6 +35,10 @@ def parse_args():
     parser.add_argument("--mode", choices=["prompt", "category", "random", "simulation"], default="prompt")
     parser.add_argument("--category", default="items")
     parser.add_argument("--simulation-type", default="grow")
+    parser.add_argument("--sim-shape", default="circle")
+    parser.add_argument("--sim-speed", default="fast")
+    parser.add_argument("--sim-colors", default="neon")
+    parser.add_argument("--sim-music", default="on")
     parser.add_argument("--topics-file", default=str(ROOT / "topics.txt"))
     parser.add_argument("--config", default=str(ROOT / "config.json"))
     parser.add_argument("--duration", type=int)
@@ -54,10 +58,16 @@ def generate_simulation(args, cfg):
     out_root = ensure_dir(ROOT / cfg.get("output_folder", "output"))
     work_dir = ensure_dir(ROOT / "tmp" / "simulation")
     duration = float(cfg["video"].get("target_duration", 34))
-    video = render_simulation(args.simulation_type, duration, cfg, out_root, work_dir)
+    options = {
+        "shape": args.sim_shape,
+        "speed": args.sim_speed,
+        "colors": args.sim_colors,
+        "music": "off" if args.no_music else args.sim_music,
+    }
+    video = render_simulation(args.simulation_type, duration, cfg, out_root, work_dir, options)
     print("\nVIDEO COMPLETE\n")
     print(f"Video:\n{video}")
-    print("Simulation finished on its own ending. No voice. No captions.")
+    print("Simulation ended when the match finished. No voice. No captions.")
     return video
 
 def generate_one(topic, cfg):

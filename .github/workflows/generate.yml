@@ -8,54 +8,49 @@ on:
         required: true
         type: choice
         default: prompt
-        options:
-          - prompt
-          - category
-          - random
-          - simulation
+        options: [prompt, category, random, simulation]
       category:
         description: "Minecraft category"
         required: false
         type: choice
         default: items
-        options:
-          - crystal-pvp
-          - pvp
-          - redstone
-          - nether
-          - end
-          - enchanting
-          - mobs
-          - items
-          - building
-          - simulation
+        options: [crystal-pvp, pvp, redstone, nether, end, enchanting, mobs, items, building, simulation]
       simulation_type:
-        description: "grow=ball gets bigger | shrink=circle shrinks | squeeze=both | swarm=many balls | spawn=bounces add balls | box/triangle/hexagon=other shapes | rings=escape rotating gaps | race=two colors | gravity=falling bowl | split=ball splits | orbit=rim trails | paddle=spinning gap | random=surprise"
+        description: "Simulation type"
         required: false
         type: choice
-        default: grow
-        options:
-          - grow
-          - shrink
-          - squeeze
-          - swarm
-          - spawn
-          - box
-          - triangle
-          - hexagon
-          - rings
-          - race
-          - gravity
-          - split
-          - orbit
-          - paddle
-          - random
+        default: colorfight
+        options: [grow, shrink, squeeze, colorfight, paint, merge, king, swarm, spawn, rings, race, split, random]
+      sim_shape:
+        description: "Arena shape"
+        required: false
+        type: choice
+        default: circle
+        options: [circle, square, triangle, hexagon]
+      sim_speed:
+        description: "Ball speed"
+        required: false
+        type: choice
+        default: fast
+        options: [slow, normal, fast]
+      sim_colors:
+        description: "Colour set"
+        required: false
+        type: choice
+        default: neon
+        options: [neon, rainbow, two-tone]
+      sim_music:
+        description: "Background music + bounce clicks"
+        required: false
+        type: choice
+        default: on
+        options: [on, off]
       topic:
-        description: "Your Minecraft prompt (mode=prompt)"
+        description: "Prompt text (mode=prompt)"
         required: false
         default: "Minecraft totem of undying"
       duration:
-        description: "Talking-video length. Simulations ignore this and end when they finish."
+        description: "Talking-video length. Sims end when the match is over."
         required: false
         default: "34"
 
@@ -82,7 +77,7 @@ jobs:
           pip install -r requirements.txt
       - name: Generate Short (no API keys)
         run: |
-          python main.py --mode "${{ github.event.inputs.mode }}" --category "${{ github.event.inputs.category }}" --simulation-type "${{ github.event.inputs.simulation_type }}" --topic "${{ github.event.inputs.topic }}" --duration ${{ github.event.inputs.duration }}
+          python main.py --mode "${{ github.event.inputs.mode }}" --category "${{ github.event.inputs.category }}" --simulation-type "${{ github.event.inputs.simulation_type }}" --sim-shape "${{ github.event.inputs.sim_shape }}" --sim-speed "${{ github.event.inputs.sim_speed }}" --sim-colors "${{ github.event.inputs.sim_colors }}" --sim-music "${{ github.event.inputs.sim_music }}" --topic "${{ github.event.inputs.topic }}" --duration ${{ github.event.inputs.duration }}
       - name: Prepare download folder
         run: |
           set -e
