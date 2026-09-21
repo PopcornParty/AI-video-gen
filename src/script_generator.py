@@ -1,4 +1,4 @@
-"""Write a spoken Short that sounds like a person explaining the prompt."""
+"""Write a spoken Short that stays on the prompt without repeating the title."""
 from __future__ import annotations
 import re
 from .minecraft_kb import minecraft_topic, minecraft_visuals, specific_keys, topic_keys
@@ -9,41 +9,43 @@ def generate_script(research, target_duration=32, language="en"):
     topic = (research.get("topic") or "this topic").strip()
     focus = clean_topic_query(topic)
     info(f"Script locked to prompt: {topic}")
-    facts = unique_keep_order([_spoken(f) for f in (research.get("facts") or []) if _on_topic(f, topic)])
+    raw = research.get("facts") or []
+    facts = unique_keep_order([_spoken(f) for f in raw if _usable(f, topic)])
+    if len(facts) < 3:
+        facts = unique_keep_order(facts + [_spoken(f) for f in raw])
     script = _human_script(topic, focus, facts)
-    script["full_narration"] = script["full_narration"]
     script["scenes"] = _plan_scenes(script, research)
     script["sources"] = research.get("sources") or []
     return script
 
-def _on_topic(text, topic):
+def _usable(text, topic):
     low = text.lower()
-    keys = specific_keys(topic)
-    if not keys:
-        return True
-    return any(k in low or k.rstrip("s") in low for k in keys)
+    if low.startswith("this video is only about") or low.startswith("this whole short"):
+        return False
+    if low.count(topic.lower()) > 0 and len(text.split()) < 10:
+        return False
+    return True
 
 def _human_script(topic, focus, facts):
-    label = focus if focus else topic
-    short = label if len(label.split()) <= 6 else " ".join(label.split()[:6])
-    hook = f"Okay, real quick. {short}."
-    hook_card = short[:32]
+    short = focus if focus else topic
+    if len(short.split()) > 5:
+        short = " ".join(short.split()[:5])
+    hook = f"Real quick, {short}."
+    hook_card = short[:28]
+    facts = [f for f in facts if f and short.lower() not in f.lower() or len(f.split()) > 8]
     if not facts:
-        facts = [f"This whole Short stays on {short}."]
-    spoken = [hook, facts[0]]
-    bridges = ["Also,", "And", "That's why", "One more thing."]
-    for i, fact in enumerate(facts[1:5]):
-        fact = fact[0].lower() + fact[1:] if fact and fact[0].isupper() else fact
-        spoken.append(f"{bridges[i % len(bridges)]} {fact}")
-    spoken.append(f"Anyway, that's {short}. Follow if you want more.")
-    narration = re.sub(r"\s+", " ", " ".join(spoken)).replace("..", ".")
+        facts = ["Here is the part most people skip."]
+    interest = facts[0]
     body = facts[1:5]
+    ending = "Follow if you want the next one."
+    parts = [hook, interest] + body + [ending]
+    narration = re.sub(r"\s+", " ", " ".join(parts))
     return {
         "hook": hook,
         "hook_card": hook_card,
-        "interest": facts[0],
+        "interest": interest,
         "body": body,
-        "ending": f"Anyway, that's {short}. Follow if you want more.",
+        "ending": ending,
         "full_narration": narration,
         "title_seed": short,
         "provider": "human-flow",
@@ -52,12 +54,11 @@ def _human_script(topic, focus, facts):
 def _spoken(sentence):
     s = re.sub(r"\s+", " ", sentence).strip()
     s = re.sub(r"^(In Minecraft, |Minecraft |A true Minecraft |The Minecraft )", "", s)
-    s = s.replace("This Short is about", "This is")
     if not s.endswith((".", "!", "?")):
         s += "."
     words = s.split()
-    if len(words) > 26:
-        s = " ".join(words[:26]).rstrip(",;:") + "."
+    if len(words) > 22:
+        s = " ".join(words[:22]).rstrip(",;:") + "."
     return s[0].upper() + s[1:] if s else s
 
 def _plan_scenes(script, research):
@@ -69,6 +70,7 @@ def _plan_scenes(script, research):
     topic = research.get("topic") or ""
     lookups = minecraft_visuals(topic) if minecraft_topic(topic) else visual_lookups(topic)
     tokens = specific_keys(topic) or topic_keys(topic) or [clean_topic_query(topic).lower()]
+    tokens = [t for t in tokens if t not in {"mark", "facts", "fact"}]
     scenes = []
     for i, (kind, text) in enumerate(units):
         query = lookups[i % len(lookups)] if lookups else topic
